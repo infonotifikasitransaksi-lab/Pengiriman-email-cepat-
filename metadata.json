@@ -1,0 +1,6 @@
+{
+  "name": "G-Swift Relay",
+  "description": "Sistem Informasi dan Pengiriman Email Cepat dengan SMTP Relay, Manajemen Template, dan Konsol Log Real-time.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
