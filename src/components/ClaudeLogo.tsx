@@ -7,6 +7,7 @@ interface ClaudeLogoProps {
   textPosition?: "bottom" | "right";
   animated?: boolean;
   speed?: "normal" | "fast";
+  color?: string;
 }
 
 export const CLAUDE_GIF_URL = "/claude.gif?v=3";
@@ -46,12 +47,11 @@ export const ClaudeLogo: React.FC<ClaudeLogoProps> = React.memo(({
     return icon;
   }
 
-  // Exact 1:1 layout matching reference image with serif "Claude Mythos" typography and freely floating icon
   if (textPosition === "bottom") {
     return (
       <div className="flex flex-col items-center justify-center gap-3 select-none">
         {icon}
-        <span className="font-serif text-slate-900 tracking-tight text-xl sm:text-2xl font-medium leading-none">
+        <span className="font-serif text-[#141413] tracking-tight text-3xl font-medium leading-none">
           Claude Mythos
         </span>
       </div>
@@ -61,11 +61,15 @@ export const ClaudeLogo: React.FC<ClaudeLogoProps> = React.memo(({
   return (
     <div className="flex items-center gap-2 select-none">
       {icon}
-      <span className="font-serif text-slate-900 tracking-tight text-sm sm:text-base font-medium leading-none">
+      <span className="font-serif text-[#141413] tracking-tight text-sm sm:text-base font-medium leading-none">
         Claude Mythos
       </span>
     </div>
   );
 });
 
+// Alias for compatibility
+export const ClaudeSunburstIcon = ClaudeLogo;
+
 export default ClaudeLogo;
+

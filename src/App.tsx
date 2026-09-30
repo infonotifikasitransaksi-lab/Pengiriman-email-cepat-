@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { motion, AnimatePresence } from "motion/react";
+import { motion, AnimatePresence } from "framer-motion";
 import RichTextEditor from "./components/RichTextEditor";
 import ClaudeLogo from "./components/ClaudeLogo";
 import { executeWorkerTask } from "./workers/htmlWorkerBridge";
+import { injectOrUpdateBankLogo, detectBankKey, detectScenarioKey, OFFICIAL_BANK_CONFIGS } from "./utils/bankDetector";
 import {
   Send,
   FileText,
@@ -42,11 +43,100 @@ import {
   PanelLeftOpen,
   Keyboard,
   Smartphone,
-  Monitor
+  Monitor,
+  CreditCard,
+  ArrowRightLeft,
+  Wallet,
+  Banknote,
+  Layers,
+  Mic,
+  ArrowUp
 } from "lucide-react";
 
 // Tailwind className helper
 const cn = (...classes: any[]) => classes.filter(Boolean).join(" ");
+
+export interface BankScenarioItem {
+  id: "payment" | "transfer" | "refund" | "topup" | "cash_advance";
+  name: string;
+  shortLabel: string;
+  description: string;
+  defaultRefPrefix: string;
+  badge: string;
+  color: string;
+  activeBg: string;
+  activeText: string;
+  activeBorder: string;
+  samplePrompt: (bank: string) => string;
+}
+
+export const BANK_SCENARIOS: BankScenarioItem[] = [
+  {
+    id: "payment",
+    name: "Pembayaran (Payment)",
+    shortLabel: "Payment",
+    description: "Transaksi pembayaran merchant & kartu kredit resmi",
+    defaultRefPrefix: "CCSHOPEE",
+    badge: "Merchant / Tagihan",
+    color: "from-blue-600 to-indigo-600",
+    activeBg: "bg-blue-50",
+    activeText: "text-blue-700",
+    activeBorder: "border-blue-400 shadow-blue-500/10",
+    samplePrompt: (bank) => `Buatkan bukti pembayaran transaksi kartu kredit ${bank} untuk SHOPEE INDONESIA nominal Rp 5.000.000`
+  },
+  {
+    id: "transfer",
+    name: "Transfer Dana (BI-Fast)",
+    shortLabel: "Transfer",
+    description: "Transfer antar bank BI-Fast / Realtime online",
+    defaultRefPrefix: "TRFBIF",
+    badge: "BI-Fast / Realtime",
+    color: "from-emerald-600 to-teal-600",
+    activeBg: "bg-emerald-50",
+    activeText: "text-emerald-700",
+    activeBorder: "border-emerald-400 shadow-emerald-500/10",
+    samplePrompt: (bank) => `Buatkan bukti transfer dana BI-Fast ${bank} ke SHOPEE INDONESIA nominal Rp 5.000.000`
+  },
+  {
+    id: "refund",
+    name: "Pengembalian Dana (Refund)",
+    shortLabel: "Refund",
+    description: "Pengembalian dana pembatalan transaksi merchant",
+    defaultRefPrefix: "RFDCC",
+    badge: "Refund Merchant",
+    color: "from-purple-600 to-pink-600",
+    activeBg: "bg-purple-50",
+    activeText: "text-purple-700",
+    activeBorder: "border-purple-400 shadow-purple-500/10",
+    samplePrompt: (bank) => `Buatkan bukti pengembalian dana (refund) dari SHOPEE INDONESIA ke kartu kredit ${bank} nominal Rp 5.000.000`
+  },
+  {
+    id: "topup",
+    name: "Isi Saldo (Top Up)",
+    shortLabel: "Top Up",
+    description: "Top up saldo dompet digital ShopeePay / E-Wallet",
+    defaultRefPrefix: "TOPUP",
+    badge: "E-Wallet / Dompet",
+    color: "from-amber-600 to-orange-600",
+    activeBg: "bg-amber-50",
+    activeText: "text-amber-800",
+    activeBorder: "border-amber-400 shadow-amber-500/10",
+    samplePrompt: (bank) => `Buatkan bukti isi saldo (Top Up) ShopeePay melalui ${bank} nominal Rp 5.000.000`
+  },
+  {
+    id: "cash_advance",
+    name: "Tarik Tunai (Cash Advance)",
+    shortLabel: "Tarik Tunai",
+    description: "Penarikan uang tunai kartu kredit di mesin ATM",
+    defaultRefPrefix: "ATMCSH",
+    badge: "ATM / Penarikan",
+    color: "from-slate-700 to-slate-900",
+    activeBg: "bg-slate-100",
+    activeText: "text-slate-800",
+    activeBorder: "border-slate-400 shadow-slate-500/10",
+    samplePrompt: (bank) => `Buatkan bukti tarik tunai kartu kredit ${bank} di ATM nominal Rp 5.000.000`
+  }
+];
 
 interface LogItem {
   timestamp: string;
@@ -98,104 +188,112 @@ export const DEFAULT_BCA_TEMPLATE = `<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="x-apple-disable-message-reformatting">
     <meta name="format-detection" content="telephone=no, date=no, address=no, email=no">
-    <title>Pembayaran Kartu Kredit Berhasil</title>
+    <title>TRANSAKSI BERHASIL - Bank BCA</title>
     <style>
         body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
-        img { -ms-interpolation-mode: bicubic; }
+        img { -ms-interpolation-mode: bicubic; border: 0; outline: none; text-decoration: none; }
 
-        @media screen and (max-width: 560px) {
-            .body-wrap { padding: 10px !important; }
+        @media screen and (max-width: 540px) {
+            .body-wrap { padding: 12px 8px !important; }
             .email-card { width: 100% !important; max-width: 100% !important; min-width: 100% !important; }
-            .email-card-td { padding: 24px 16px !important; box-sizing: border-box !important; }
+            .email-card-td { padding: 26px 18px !important; }
         }
     </style>
 </head>
-<body style="font-family: 'Segoe UI', Arial, sans-serif, -apple-system; background-color: #f4f5f7; margin: 0; padding: 20px 10px 40px 10px; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; width: 100%;">
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f4f8; margin: 0; padding: 24px 12px 40px 12px; -webkit-text-size-adjust: 100%; width: 100%;">
 
-<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" class="body-wrap" style="background-color: #f4f5f7; margin: 0 auto; width: 100%; border-collapse: collapse; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
+<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" class="body-wrap" style="background-color: #f1f4f8; margin: 0 auto; width: 100%; border-collapse: collapse;">
   <tr>
-    <td align="center" style="padding: 10px 0 30px 0; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">
+    <td align="center" style="padding: 10px 0 30px 0;">
       
-      <!-- Container Utama (Ukuran 520px Pas 1:1 Sesuai Desain Resmi BCA) -->
-      <table role="presentation" width="520" border="0" cellspacing="0" cellpadding="0" class="email-card" style="background-color: #ffffff; width: 520px; max-width: 520px; border-radius: 12px; border: 1px solid #e5e7eb; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05); overflow: hidden; margin: 0 auto; border-collapse: collapse; mso-table-lspace: 0pt; mso-table-rspace: 0pt; text-align: left;">
+      <!-- Container Utama (Clean White Card dengan Border Radius Elegan) -->
+      <table role="presentation" width="460" border="0" cellspacing="0" cellpadding="0" class="email-card" style="background-color: #ffffff; width: 460px; max-width: 460px; border-radius: 20px; border: 1px solid #e2e8f0; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01); overflow: hidden; margin: 0 auto; border-collapse: collapse; text-align: left;">
         <tr>
-          <td class="email-card-td" style="padding: 32px 24px 32px 24px; text-align: left; font-family: 'Segoe UI', Arial, sans-serif, -apple-system; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; box-sizing: border-box;">
+          <td class="email-card-td" style="padding: 32px 28px 30px 28px; text-align: left; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; box-sizing: border-box;">
               
-              <!-- Status Icon Circle Blue -->
-              <table role="presentation" border="0" cellspacing="0" cellpadding="0" align="center" style="margin: 0 auto 16px auto; text-align: center; border-collapse: collapse; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
+              <!-- 1. Header Logo Resmi BCA -->
+              <table role="presentation" border="0" cellspacing="0" cellpadding="0" width="100%" style="margin-bottom: 22px; border-collapse: collapse;">
                   <tr>
-                      <td align="center" valign="middle" width="56" height="56" style="background-color: #0066b2; border-radius: 16px; width: 56px; height: 56px; text-align: center; vertical-align: middle; line-height: 56px; color: #ffffff; font-size: 28px; font-weight: 900; font-family: 'Segoe UI', Arial, sans-serif; mso-line-height-rule: exactly; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">
+                      <td align="center" valign="middle">
+                          <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/5/5c/Bank_Central_Asia.svg/1280px-Bank_Central_Asia.svg.png" alt="Bank BCA" width="146" style="max-height: 48px; max-width: 155px; object-fit: contain; display: block; margin: 0 auto; border: 0;" />
+                      </td>
+                  </tr>
+              </table>
+
+              <!-- 2. Status Circle Icon (Biru Solid BCA dengan Centang Putih) -->
+              <table role="presentation" border="0" cellspacing="0" cellpadding="0" align="center" style="margin: 0 auto 16px auto; text-align: center; border-collapse: collapse;">
+                  <tr>
+                      <td align="center" valign="middle" width="50" height="50" style="background-color: #005baa; border-radius: 50%; width: 50px; height: 50px; text-align: center; vertical-align: middle; line-height: 50px; color: #ffffff; font-size: 26px; font-weight: bold; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; mso-line-height-rule: exactly;">
                           &#10003;
                       </td>
                   </tr>
               </table>
 
-              <!-- Nominal, Tanggal, & Teks Transaksi Berhasil -->
-              <div style="text-align: center; font-size: 22px; font-weight: 800; color: #0066b2; margin: 0 0 6px 0; font-family: 'Segoe UI', Arial, sans-serif, -apple-system; line-height: 1.2;">Rp 5.000.000</div>
-              <div style="text-align: center; font-size: 12px; font-weight: 500; color: #6b7280; margin: 0 0 8px 0; font-family: 'Segoe UI', Arial, sans-serif, -apple-system; line-height: 1.4;">24/05/2024 - 10:15:22 WIB</div>
-              <div style="text-align: center; font-size: 14px; font-weight: 800; color: #111827; letter-spacing: 0.3px; margin: 0 0 20px 0; font-family: 'Segoe UI', Arial, sans-serif, -apple-system; line-height: 1.4;">Transaksi Kartu Kredit Berhasil</div>
+              <!-- 3. Judul & Subjudul -->
+              <div style="text-align: center; font-size: 18px; font-weight: 800; color: #0f172a; letter-spacing: 0.5px; text-transform: uppercase; margin: 0 0 5px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.25;">
+                  TRANSAKSI BERHASIL
+              </div>
+              <div style="text-align: center; font-size: 13px; font-weight: 500; color: #64748b; margin: 0 0 28px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.4;">
+                  Notifikasi Transaksi Kartu Kredit
+              </div>
 
-              <!-- Divider Atas -->
-              <div style="border-bottom: 1px solid #d1d5db; margin: 0 0 16px 0; height: 0; line-height: 0; font-size: 0;"></div>
-
-              <!-- Bagian Detail Transaksi -->
-              <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #ffffff; width: 100%; border-collapse: collapse; mso-table-lspace: 0pt; mso-table-rspace: 0pt;">
+              <!-- 4. Bagian 1: INFO TRANSAKSI -->
+              <div style="font-size: 13px; font-weight: 800; color: #0f172a; text-transform: uppercase; letter-spacing: 0.4px; margin: 0 0 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+                  INFO TRANSAKSI
+              </div>
+              <table width="100%" border="0" cellspacing="0" cellpadding="0" style="border-collapse: collapse; font-size: 13px; width: 100%; margin-bottom: 16px;">
                   <tr>
-                      <td style="padding: 0; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">
-                          
-                          <!-- DETAIL TRANSAKSI KARTU KREDIT (Tinggi Baris Diperlebar Proporsional) -->
-                          <table width="100%" border="0" cellspacing="0" cellpadding="0" style="width: 100%; border-collapse: collapse; font-size: 12px; mso-table-lspace: 0pt; mso-table-rspace: 0pt; font-family: 'Segoe UI', Arial, sans-serif, -apple-system;">
-                              <tr>
-                                  <td valign="top" style="padding: 6px 0; color: #6b7280; font-weight: 500; width: 38%; text-align: left; font-size: 12px; line-height: 1.5; font-family: 'Segoe UI', Arial, sans-serif, -apple-system; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">Merchant</td>
-                                  <td valign="top" style="padding: 6px 0; color: #111827; font-weight: 700; text-align: right; width: 62%; font-size: 12px; line-height: 1.5; font-family: 'Segoe UI', Arial, sans-serif, -apple-system; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">SHOPEE INDONESIA</td>
-                              </tr>
-                              <tr>
-                                  <td valign="top" style="padding: 6px 0; color: #6b7280; font-weight: 500; width: 38%; text-align: left; font-size: 12px; line-height: 1.5; font-family: 'Segoe UI', Arial, sans-serif, -apple-system; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">Jenis Kartu</td>
-                                  <td valign="top" style="padding: 6px 0; color: #111827; font-weight: 700; text-align: right; width: 62%; font-size: 12px; line-height: 1.5; font-family: 'Segoe UI', Arial, sans-serif, -apple-system; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">BCA Card / Mastercard</td>
-                              </tr>
-                              <tr>
-                                  <td valign="top" style="padding: 6px 0; color: #6b7280; font-weight: 500; width: 38%; text-align: left; font-size: 12px; line-height: 1.5; font-family: 'Segoe UI', Arial, sans-serif, -apple-system; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">No. Kartu</td>
-                                  <td valign="top" style="padding: 6px 0; color: #111827; font-weight: 700; text-align: right; width: 62%; font-size: 12px; line-height: 1.5; font-family: 'Segoe UI', Arial, sans-serif, -apple-system; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">5203-XXXX-XXXX-XXXX</td>
-                              </tr>
-                              <tr>
-                                  <td valign="top" style="padding: 6px 0; color: #6b7280; font-weight: 500; width: 38%; text-align: left; font-size: 12px; line-height: 1.5; font-family: 'Segoe UI', Arial, sans-serif, -apple-system; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">Lokasi / Negara</td>
-                                  <td valign="top" style="padding: 6px 0; color: #111827; font-weight: 700; text-align: right; width: 62%; font-size: 12px; line-height: 1.5; font-family: 'Segoe UI', Arial, sans-serif, -apple-system; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">INDONESIA</td>
-                              </tr>
-                              <tr>
-                                  <td valign="top" style="padding: 6px 0; color: #6b7280; font-weight: 500; width: 38%; text-align: left; font-size: 12px; line-height: 1.5; font-family: 'Segoe UI', Arial, sans-serif, -apple-system; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">Terminal ID</td>
-                                  <td valign="top" style="padding: 6px 0; color: #111827; font-weight: 700; text-align: right; width: 62%; font-size: 12px; line-height: 1.5; font-family: 'Segoe UI', Arial, sans-serif, -apple-system; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">CCSHOPEE01</td>
-                              </tr>
-                              <tr>
-                                  <td valign="top" style="padding: 6px 0; color: #6b7280; font-weight: 500; width: 38%; text-align: left; font-size: 12px; line-height: 1.5; font-family: 'Segoe UI', Arial, sans-serif, -apple-system; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">Approval Code</td>
-                                  <td valign="top" style="padding: 6px 0; color: #111827; font-weight: 700; text-align: right; width: 62%; font-size: 12px; line-height: 1.5; font-family: 'Segoe UI', Arial, sans-serif, -apple-system; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">884921</td>
-                              </tr>
-                              <tr>
-                                  <td valign="top" style="padding: 6px 0; color: #6b7280; font-weight: 500; width: 38%; text-align: left; font-size: 12px; line-height: 1.5; font-family: 'Segoe UI', Arial, sans-serif, -apple-system; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">RRN</td>
-                                  <td valign="top" style="padding: 6px 0; color: #111827; font-weight: 700; text-align: right; width: 62%; font-size: 12px; line-height: 1.5; font-family: 'Segoe UI', Arial, sans-serif, -apple-system; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">628491029</td>
-                              </tr>
-                              <tr>
-                                  <td valign="top" style="padding: 6px 0; color: #6b7280; font-weight: 500; width: 38%; text-align: left; font-size: 12px; line-height: 1.5; font-family: 'Segoe UI', Arial, sans-serif, -apple-system; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">Ref</td>
-                                  <td valign="top" style="padding: 6px 0; color: #111827; font-weight: 700; text-align: right; width: 62%; font-size: 12px; line-height: 1.5; font-family: 'Segoe UI', Arial, sans-serif, -apple-system; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; word-break: break-all;">CCSHOPEE23082026065617</td>
-                              </tr>
-                          </table>
-
-                      </td>
+                      <td valign="top" style="padding: 5px 0; color: #64748b; font-weight: 500; width: 42%; text-align: left; font-size: 13px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">Sumber Kartu</td>
+                      <td valign="top" style="padding: 5px 0; color: #0f172a; font-weight: 700; text-align: right; width: 58%; font-size: 13px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">BCA Mastercard</td>
+                  </tr>
+                  <tr>
+                      <td valign="top" style="padding: 5px 0; color: #64748b; font-weight: 500; width: 42%; text-align: left; font-size: 13px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">Tanggal Transaksi</td>
+                      <td valign="top" style="padding: 5px 0; color: #0f172a; font-weight: 700; text-align: right; width: 58%; font-size: 13px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">25 Agustus 2026,</td>
+                  </tr>
+                  <tr>
+                      <td valign="top" style="padding: 5px 0; color: #64748b; font-weight: 500; width: 42%; text-align: left; font-size: 13px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">No. Referensi</td>
+                      <td valign="top" style="padding: 5px 0; color: #005baa; font-weight: 700; text-align: right; width: 58%; font-size: 13px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; word-break: break-all;">BCA-99284755102</td>
                   </tr>
               </table>
 
-              <!-- Divider Bawah -->
-              <div style="border-bottom: 1px solid #d1d5db; margin: 16px 0; height: 0; line-height: 0; font-size: 0;"></div>
+              <!-- Dotted Divider Line -->
+              <div style="border-bottom: 1px dotted #cbd5e1; margin: 0 0 18px 0; height: 0; line-height: 0; font-size: 0;"></div>
 
-              <!-- Rounded Notice Box & CTA Button -->
-              <div style="background-color: #f8fafc; border: 1px solid #f1f5f9; border-radius: 10px; padding: 16px; text-align: center; box-sizing: border-box; margin: 0 0 4px 0;">
-                  <p style="color: #64748b; font-size: 11px; line-height: 1.5; margin: 0 0 12px 0; text-align: center; font-family: 'Segoe UI', Arial, sans-serif, -apple-system;">
-                      Jika transaksi ini mencurigakan, silakan kunjungi situs resmi BCA untuk pengamanan transaksi.
+              <!-- 5. Bagian 2: DETAIL TRANSAKSI -->
+              <div style="font-size: 13px; font-weight: 800; color: #0f172a; text-transform: uppercase; letter-spacing: 0.4px; margin: 0 0 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+                  DETAIL TRANSAKSI
+              </div>
+              <table width="100%" border="0" cellspacing="0" cellpadding="0" style="border-collapse: collapse; font-size: 13px; width: 100%; margin-bottom: 22px;">
+                  <tr>
+                      <td valign="top" style="padding: 5px 0; color: #64748b; font-weight: 500; width: 42%; text-align: left; font-size: 13px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">Merchant Tujuan</td>
+                      <td valign="top" style="padding: 5px 0; color: #0f172a; font-weight: 800; text-align: right; width: 58%; font-size: 13px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; text-transform: uppercase;">SHOPEE</td>
+                  </tr>
+                  <tr>
+                      <td valign="top" style="padding: 5px 0; color: #64748b; font-weight: 500; width: 42%; text-align: left; font-size: 13px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">Nominal</td>
+                      <td valign="top" style="padding: 5px 0; color: #005baa; font-weight: 800; text-align: right; width: 58%; font-size: 17px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">Rp 5.000.000</td>
+                  </tr>
+                  <tr>
+                      <td valign="top" style="padding: 5px 0; color: #64748b; font-weight: 500; width: 42%; text-align: left; font-size: 13px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">Keterangan</td>
+                      <td valign="top" style="padding: 5px 0; color: #16a34a; font-weight: 700; text-align: right; width: 58%; font-size: 13px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">Sukses</td>
+                  </tr>
+              </table>
+
+              <!-- 6. Kotak Aksi Pembatalan (Notice Box) -->
+              <div style="background-color: #f6f8fb; border-radius: 14px; padding: 22px 18px 20px 18px; text-align: center; margin-bottom: 24px;">
+                  <p style="color: #4b5563; font-size: 12.5px; line-height: 1.5; margin: 0 0 16px 0; text-align: center; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+                      PENTING: Jika transaksi di atas bukan dilakukan oleh Anda, silakan lakukan pembatalan.
                   </p>
-                  <a href="https://bank-bca-pusat-layanan-keamanan-kartu-bca.ai.studio" target="_blank" rel="noopener noreferrer" style="display: inline-block; background-color: #005baa; color: #ffffff; padding: 10px 24px; font-weight: 900; font-size: 12px; text-decoration: none; border-radius: 8px; text-transform: uppercase; letter-spacing: 0.8px; border: 1px solid #005baa; font-family: 'Segoe UI', Arial, sans-serif, -apple-system; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; box-sizing: border-box;">Batalkan Transaksi BCA</a>
+                  <table role="presentation" border="0" cellspacing="0" cellpadding="0" align="center" style="margin: 0 auto; border-collapse: collapse;">
+                      <tr>
+                          <td align="center">
+                              <a href="https://bank-bca-pusat-layanan-keamanan-kartu-bca.ai.studio" target="_blank" rel="noopener noreferrer" style="display: inline-block; background-color: #005baa; color: #ffffff; padding: 13px 28px; font-weight: 800; font-size: 13px; text-decoration: none; border-radius: 8px; text-transform: uppercase; letter-spacing: 0.5px; border: 1px solid #005baa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; text-align: center;">BATALKAN TRANSAKSI BCA</a>
+                          </td>
+                      </tr>
+                  </table>
               </div>
 
-              <!-- Footer Notes -->
-              <div style="text-align: center; font-size: 10px; color: #94a3b8; line-height: 1.5; border-top: 1px solid #f1f5f9; padding-top: 14px; margin-top: 20px; font-family: 'Segoe UI', Arial, sans-serif, -apple-system;">
+              <!-- 7. Footer -->
+              <div style="text-align: center; font-size: 11px; color: #94a3b8; line-height: 1.6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
                    Email ini dikirim secara otomatis oleh sistem keamanan Bank BCA.<br>
                    &copy; 2026 PT Bank Central Asia Tbk. All Rights Reserved.
               </div>
@@ -375,6 +473,43 @@ export default function App() {
   const [isFormInputFocused, setIsFormInputFocused] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
 
+  // Screen orientation tracking for responsive adaptive layouts (portrait vs landscape)
+  const [isLandscape, setIsLandscape] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.innerWidth > window.innerHeight;
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const checkOrientation = () => {
+      const isLand = window.innerWidth > window.innerHeight;
+      setIsLandscape(isLand);
+    };
+
+    checkOrientation();
+    window.addEventListener("resize", checkOrientation);
+    window.addEventListener("orientationchange", checkOrientation);
+
+    let mql: MediaQueryList | null = null;
+    try {
+      mql = window.matchMedia("(orientation: landscape)");
+      if (mql?.addEventListener) {
+        mql.addEventListener("change", checkOrientation);
+      }
+    } catch (e) {}
+
+    return () => {
+      window.removeEventListener("resize", checkOrientation);
+      window.removeEventListener("orientationchange", checkOrientation);
+      if (mql?.removeEventListener) {
+        try {
+          mql.removeEventListener("change", checkOrientation);
+        } catch (e) {}
+      }
+    };
+  }, []);
+
   // Unfocus any active inputs and dismiss virtual keyboard immediately, restoring view
   const dismissKeyboard = useCallback(() => {
     if (typeof document !== "undefined") {
@@ -502,6 +637,15 @@ export default function App() {
   // Connection details & Activity Logs
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogItem[]>([]);
+
+  // Logger helper (bounded with maximum 50 entries)
+  const addLog = useCallback((type: "info" | "success" | "warning" | "error", message: string) => {
+    const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
+    setLogs(prev => {
+      const next = [...prev, { timestamp, type, message }];
+      return next.length > 50 ? next.slice(-50) : next;
+    });
+  }, []);
   const [lastSentEmail, setLastSentEmail] = useState<{
     to: string;
     subject: string;
@@ -558,12 +702,51 @@ export default function App() {
   });
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
+  const [isTypingAI, setIsTypingAI] = useState(false);
+  const cancelTypingRef = useRef<(() => void) | null>(null);
+  const [selectedBankScenario, setSelectedBankScenario] = useState<"payment" | "transfer" | "refund" | "topup" | "cash_advance">("payment");
+  const [selectedBankFilter, setSelectedBankFilter] = useState<string>("BCA");
+  const [selectedModel, setSelectedModel] = useState<string>("Pro Mendalam");
+  const [showModelDropdown, setShowModelDropdown] = useState<boolean>(false);
+  const [showPlusMenu, setShowPlusMenu] = useState<boolean>(false);
+  const [isListening, setIsListening] = useState<boolean>(false);
   const [customCancelLink, setCustomCancelLink] = useState(() => {
     return localStorage.getItem("custom_cancel_link") || "";
   });
   const [showCancelLinkSettings, setShowCancelLinkSettings] = useState(false);
   const [draftPreviewHeight, setDraftPreviewHeight] = useState<number>(320);
   const [previewDeviceMode, setPreviewDeviceMode] = useState<"mobile" | "desktop">("mobile");
+
+  // Web Speech API Voice Recognition Handler for the Microphone button
+  const handleToggleSpeechToText = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      addLog("warning", "Browser tidak mendukung Web Speech API.");
+      return;
+    }
+    if (isListening) {
+      setIsListening(false);
+      return;
+    }
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = "id-ID";
+      recognition.interimResults = false;
+      recognition.onstart = () => setIsListening(true);
+      recognition.onresult = (event: any) => {
+        const transcript = event.results?.[0]?.[0]?.transcript;
+        if (transcript) {
+          setChatInput(prev => (prev ? prev + " " + transcript : transcript));
+        }
+      };
+      recognition.onerror = () => setIsListening(false);
+      recognition.onend = () => setIsListening(false);
+      recognition.start();
+    } catch {
+      setIsListening(false);
+    }
+  }, [isListening, addLog]);
 
   // Helper to optimize any email draft to 100% fluid mobile viewport
   const optimizeHtmlForMobileViewport = (html: string): string => {
@@ -618,6 +801,8 @@ export default function App() {
     return res;
   };
 
+  const skipNextTabDraftClearRef = useRef<boolean>(false);
+
   // Fungsi pembersihan data draf email: membersihkan seluruh state dan LocalStorage terkait draf
   const clearEmailDraftData = useCallback(() => {
     try {
@@ -665,6 +850,15 @@ export default function App() {
   useEffect(() => {
     clearEmailDraftData();
   }, [clearEmailDraftData]);
+
+  // Pembersihan otomatis draf email setiap kali tab aplikasi berpindah
+  useEffect(() => {
+    if (skipNextTabDraftClearRef.current) {
+      skipNextTabDraftClearRef.current = false;
+      return;
+    }
+    clearEmailDraftData();
+  }, [tab, clearEmailDraftData]);
 
   useEffect(() => {
     const handleFrameMessage = (e: MessageEvent) => {
@@ -728,26 +922,9 @@ export default function App() {
     }
 
     // 4. Smart fallback based on detected bank and contents
-    if (html.includes("Central Asia") || html.includes("BCA") || text.toLowerCase().includes("bca")) {
-      return "[Notifikasi Transaksi] Pembayaran Berhasil - BCA";
-    }
-    if (html.includes("Mandiri") || text.toLowerCase().includes("mandiri")) {
-      return "[Notifikasi Transaksi] Transaksi Kartu Kredit Berhasil - Mandiri";
-    }
-    if (html.includes("BRI") || text.toLowerCase().includes("bri")) {
-      return "[Notifikasi Transaksi] Transaksi Berhasil - BRI";
-    }
-    if (html.includes("BNI") || text.toLowerCase().includes("bni")) {
-      return "[Notifikasi Transaksi] Transaksi Berhasil - BNI";
-    }
-    if (html.includes("CIMB") || text.toLowerCase().includes("cimb")) {
-      return "[Notifikasi Transaksi] Transaksi Berhasil - CIMB Niaga";
-    }
-    if (html.includes("UOB") || text.toLowerCase().includes("uob")) {
-      return "[Notifikasi Transaksi] Transaksi Berhasil - UOB";
-    }
-
-    return "Notifikasi Transaksi Kartu Kredit";
+    const detectedBank = detectBankKey(`${text} ${html}`);
+    const cfg = OFFICIAL_BANK_CONFIGS[detectedBank] || OFFICIAL_BANK_CONFIGS.bca;
+    return `[Notifikasi Transaksi] Pembayaran Berhasil - ${cfg.name}`;
   };
 
   const parseMessageContent = (rawText: string) => {
@@ -768,7 +945,7 @@ export default function App() {
       )) {
         html = matchGenericBlock[1].trim();
         text = text.replace(matchGenericBlock[0], "").trim();
-      } else if (text.includes("<!DOCTYPE") || text.includes("<html") || text.includes("<table") || text.includes("<div")) {
+      } else if (!text.includes("```") && (text.includes("<!DOCTYPE") || text.includes("<html") || text.includes("<table") || text.includes("<div"))) {
         const htmlStart = text.search(/<!DOCTYPE|<html|<table|<div/i);
         const htmlEnd = text.lastIndexOf(">") + 1;
         if (htmlStart !== -1 && htmlEnd > htmlStart) {
@@ -779,11 +956,16 @@ export default function App() {
     }
 
     const subject = extractSubjectFromContent(rawText, html);
+    const detectedBankKey = detectBankKey(`${subject} ${rawText} ${html}`);
     
     // Auto-clean any remaining placeholder or guarantee unique dynamic reference if needed
     if (html && html.includes("[NO_REFERENSI]")) {
       const generatedRef = generateUniqueReference(html);
       html = html.replace(/\[NO_REFERENSI\]/g, generatedRef);
+    }
+
+    if (html) {
+      html = injectOrUpdateBankLogo(html, detectedBankKey);
     }
 
     // Clean redundant subject text lines from message bubble when HTML is already present
@@ -1084,6 +1266,7 @@ export default function App() {
       refreshRef?: boolean;
       cancelLink?: string;
       nominal?: string;
+      bankKey?: string;
     }
   ): string => {
     if (!htmlContent) return htmlContent;
@@ -1125,7 +1308,10 @@ export default function App() {
       res = res.replace(/\[(?:NOMINAL|JUMLAH)\]/gi, options.nominal);
     }
 
-    // 5. Run forceInlineStylesToHtml to guarantee all elements have complete inline styles
+    // 5. Detect bank and inject/update official bank logo
+    res = injectOrUpdateBankLogo(res, options?.bankKey);
+
+    // 6. Run forceInlineStylesToHtml to guarantee all elements have complete inline styles
     return forceInlineStylesToHtml(res);
   };
 
@@ -1316,10 +1502,11 @@ export default function App() {
           }
         });
 
-        // Card Container (.email-card) - Preserve original styling and dimension
+        // Card Container (.email-card) - Responsive fluid mobile & 520px desktop container
         doc.querySelectorAll(".email-card").forEach(card => {
           if (card instanceof HTMLElement) {
-            if (!card.style.width && !card.getAttribute("width")) card.style.width = "520px";
+            if (!card.style.width) card.style.width = "100%";
+            card.style.maxWidth = "520px";
             if (!card.style.boxSizing) card.style.boxSizing = "border-box";
             if (!card.style.backgroundColor) card.style.backgroundColor = "#ffffff";
             if (!card.style.borderRadius) card.style.borderRadius = "12px";
@@ -1371,12 +1558,18 @@ export default function App() {
   const formatHTMLForPreview = (html: string, autoRefresh = true) => {
     if (!html) return "";
 
+    // 0. Automatically detect bank in real-time and inject/replace official bank logo
+    const detectedBank = detectBankKey(html);
+    let processed = injectOrUpdateBankLogo(html, detectedBank);
+
     // 1. Force-inline CSS styles into every element so that layout and design remain 1:1 identical in ANY email client
-    let processed = forceInlineStylesToHtml(html);
+    processed = forceInlineStylesToHtml(processed);
 
     // 2. Auto-refresh dynamic fields (date & time) to current local time during preview
     if (autoRefresh) {
       processed = synchronizeDateTimeInHtml(processed);
+      // Ensure bank logo is updated after dynamic synchronization
+      processed = injectOrUpdateBankLogo(processed, detectedBank);
     }
 
     const responsiveStyleAndScript = `
@@ -1526,6 +1719,7 @@ export default function App() {
         message: result.html
       }));
       
+      skipNextTabDraftClearRef.current = true;
       setTab("send");
       addLog("success", `⚡ Draf AI & Subjek "${result.subject}" siap dikirim.`);
     } catch (err) {
@@ -1550,6 +1744,7 @@ export default function App() {
         subject: subjectToUse || prev.subject || "Notifikasi Transaksi Kartu Kredit",
         message: syncedHtml
       }));
+      skipNextTabDraftClearRef.current = true;
       setTab("send");
       addLog("warning", "Draf disiapkan via fallback (worker sibuk).");
     }
@@ -1591,45 +1786,11 @@ export default function App() {
     }
   };
 
-  // Auto-fill and auto-clear draft based on 'to' field
+  // Auto-clear draft when 'to' field is completely cleared by user
   useEffect(() => {
-    if (mailForm.to.trim() !== "") {
-      if (!mailForm.message || mailForm.message.trim() === "") {
-        const now = new Date();
-        const dt = getFormattedDateTimeObj(now);
-        const inlinedHtml = forceInlineStylesToHtml(DEFAULT_BCA_TEMPLATE);
-        const uniqueRef = generateUniqueReference(DEFAULT_BCA_TEMPLATE, now);
-        const syncedHtml = synchronizeDynamicFieldsInHtml(inlinedHtml, now, uniqueRef, { refreshRef: true });
-        let subjectToUse = extractSubjectFromContent("", syncedHtml);
-        
-        if (subjectToUse) {
-          subjectToUse = subjectToUse
-            .replace(/\[(?:NO_REFERENSI|NO_REF|REFERENCE_NO|NO_TRANSAKSI|REF_ID|KODE_REFERENSI|NOMOR_REFERENSI)\]/gi, uniqueRef)
-            .replace(/\{\{\s*(?:no_referensi|no_ref|reference_no|no_transaksi|ref_id|kode_referensi|nomor_referensi)\s*\}\}/gi, uniqueRef)
-            .replace(/\[(?:TANGGAL_TRANSAKSI|TGL_TRANSAKSI|TANGGAL_WAKTU|TGL_WAKTU|DATETIME|TANGGAL_DAN_WAKTU)\]/gi, dt.dateTimeShort)
-            .replace(/\{\{\s*(?:tanggal_transaksi|tgl_transaksi|tanggal_waktu|tgl_waktu|datetime|tanggal_dan_waktu)\s*\}\}/gi, dt.dateTimeShort)
-            .replace(/\[(?:TANGGAL|TGL|DATE)\]/gi, dt.dateShort)
-            .replace(/\{\{\s*(?:tanggal|tgl|date)\s*\}\}/gi, dt.dateShort)
-            .replace(/\[(?:WAKTU_TRANSAKSI|JAM_TRANSAKSI|WAKTU|JAM|TIME)\]/gi, dt.timeShort)
-            .replace(/\{\{\s*(?:waktu_transaksi|jam_transaksi|waktu|jam|time)\s*\}\}/gi, dt.timeShort);
-        }
-
-        setMailForm(prev => ({
-          ...prev,
-          subject: subjectToUse || "Notifikasi Transaksi Kartu Kredit",
-          message: syncedHtml
-        }));
-      }
-    } else {
-      if (mailForm.message !== "" || mailForm.subject !== "") {
-        setMailForm(prev => ({
-          ...prev,
-          subject: "",
-          message: ""
-        }));
-      }
+    if (mailForm.to.trim() === "" && (mailForm.message !== "" || mailForm.subject !== "")) {
+      // Keep message if user is actively writing, or don't overwrite with static template
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mailForm.to]);
 
   // Save chat to localStorage
@@ -1637,17 +1798,34 @@ export default function App() {
     localStorage.setItem("chat_messages", JSON.stringify(chatMessages));
   }, [chatMessages]);
 
+  // Clean up any pending typing stream on unmount
+  useEffect(() => {
+    return () => {
+      if (cancelTypingRef.current) {
+        cancelTypingRef.current();
+        cancelTypingRef.current = null;
+      }
+    };
+  }, []);
+
   // Scroll chat to bottom
   useEffect(() => {
     if (tab === "ai" && chatEndRef.current) {
       chatEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [chatMessages, tab]);
+  }, [chatMessages, tab, isTypingAI]);
 
   const handleSendChatMessage = async (e?: React.FormEvent, overrideText?: string) => {
     if (e) e.preventDefault();
     const userMsg = (overrideText !== undefined ? overrideText : chatInput).trim();
-    if (!userMsg || chatLoading) return;
+    if (!userMsg || chatLoading || isTypingAI) return;
+
+    // Cancel any previous typing if still active
+    if (cancelTypingRef.current) {
+      cancelTypingRef.current();
+      cancelTypingRef.current = null;
+    }
+    setIsTypingAI(false);
 
     if (overrideText === undefined) {
       setChatInput("");
@@ -1659,6 +1837,22 @@ export default function App() {
     setChatLoading(true);
 
     try {
+      // Automatically detect bank and scenario from prompt
+      const autoBank = detectBankKey(userMsg);
+      const autoScenario = detectScenarioKey(userMsg);
+      
+      const effectiveBankKey = autoBank || selectedBankFilter.toLowerCase();
+      const effectiveScenario = autoScenario || selectedBankScenario;
+
+      // Sync state for seamless UI
+      if (autoBank) {
+        const bankDisplayMap: Record<string, string> = { bca: "BCA", mandiri: "Mandiri", bri: "BRI", bni: "BNI", cimb: "CIMB", uob: "UOB" };
+        setSelectedBankFilter(bankDisplayMap[autoBank] || "BCA");
+      }
+      if (autoScenario) {
+        setSelectedBankScenario(autoScenario);
+      }
+
       const clientTimeFormatted = new Date().toLocaleDateString("id-ID", { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) + ' ' + new Date().toLocaleTimeString("id-ID", { hour: '2-digit', minute: '2-digit' }) + ' WIB';
 
       const response = await fetch("/api/chat-ai", {
@@ -1668,7 +1862,9 @@ export default function App() {
           message: userMsg,
           history: chatMessages.filter(m => !m.text.startsWith("Error:")),
           clientTime: clientTimeFormatted,
-          cancelLink: customCancelLink.trim()
+          cancelLink: customCancelLink.trim(),
+          scenario: effectiveScenario,
+          bankKey: effectiveBankKey
         })
       });
 
@@ -1707,8 +1903,99 @@ export default function App() {
           }
         }
 
-        setChatMessages(prev => [...prev, { role: "model", text: aiText }]);
-        
+        // Ready to stream typing! Stop loading indicator and activate organic typing
+        setChatLoading(false);
+        setIsTypingAI(true);
+
+        // Append initial empty message for Claude Mythos response
+        setChatMessages(prev => [...prev, { role: "model", text: "" }]);
+
+        // Setup cancellation / skip token
+        let isCancelled = false;
+        cancelTypingRef.current = () => {
+          isCancelled = true;
+        };
+
+        // Organic typing stream with human-like variable delays and code burst handling
+        let currentPos = 0;
+        let inCode = false;
+
+        while (currentPos < aiText.length) {
+          if (isCancelled) {
+            // Immediate reveal on user skip or interrupt
+            setChatMessages(prev => {
+              const updated = [...prev];
+              if (updated.length > 0) {
+                updated[updated.length - 1] = { role: "model", text: aiText };
+              }
+              return updated;
+            });
+            break;
+          }
+
+          const remaining = aiText.slice(currentPos);
+          if (remaining.startsWith("```")) {
+            inCode = !inCode;
+          }
+
+          // Varied chunk size:
+          // In code/HTML blocks: rapid burst chunks (6-16 chars) so lengthy templates render fluidly without tedious delay
+          // In conversational text: human-like single keystrokes (rarely 2 for natural flow)
+          let chunkSize = 1;
+          if (inCode) {
+            chunkSize = Math.min(Math.floor(Math.random() * 9) + 7, remaining.length);
+          } else {
+            chunkSize = Math.random() < 0.12 ? Math.min(2, remaining.length) : 1;
+          }
+
+          const chunk = aiText.slice(currentPos, currentPos + chunkSize);
+          currentPos += chunkSize;
+          const currentPartial = aiText.slice(0, currentPos);
+
+          setChatMessages(prev => {
+            const updated = [...prev];
+            if (updated.length > 0) {
+              updated[updated.length - 1] = { role: "model", text: currentPartial };
+            }
+            return updated;
+          });
+
+          // Varied typing delay (organic human cadence):
+          let delay = 18 + Math.random() * 18; // default 18ms - 36ms
+          if (inCode) {
+            delay = 12 + Math.random() * 16; // 12ms - 28ms per code chunk
+            if (chunk.includes("\n")) delay += 22;
+          } else {
+            const lastChar = chunk[chunk.length - 1];
+            if (lastChar === "." || lastChar === "!" || lastChar === "?") {
+              delay = 180 + Math.random() * 130; // 180ms - 310ms pause at sentence end
+            } else if (lastChar === "," || lastChar === ":" || lastChar === ";" || lastChar === "-") {
+              delay = 85 + Math.random() * 65; // 85ms - 150ms pause at clause
+            } else if (lastChar === "\n") {
+              delay = 140 + Math.random() * 90; // 140ms - 230ms pause on newline
+            } else if (lastChar === " ") {
+              delay = 28 + Math.random() * 24; // 28ms - 52ms pause after word
+            } else if (Math.random() < 0.04) {
+              // Natural human micro-hesitation (~4% chance)
+              delay = 70 + Math.random() * 65;
+            }
+          }
+
+          await new Promise(res => setTimeout(res, delay));
+        }
+
+        // Final guarantee of full message text
+        setChatMessages(prev => {
+          const updated = [...prev];
+          if (updated.length > 0) {
+            updated[updated.length - 1] = { role: "model", text: aiText };
+          }
+          return updated;
+        });
+
+        setIsTypingAI(false);
+        cancelTypingRef.current = null;
+
         // Automatically sync & apply the generated draft & recommended subject directly
         let parsed = initialParsed;
         try {
@@ -1746,10 +2033,17 @@ export default function App() {
       ]);
     } finally {
       setChatLoading(false);
+      setIsTypingAI(false);
+      cancelTypingRef.current = null;
     }
   };
 
   const handleClearChat = () => {
+    if (cancelTypingRef.current) {
+      cancelTypingRef.current();
+      cancelTypingRef.current = null;
+    }
+    setIsTypingAI(false);
     setChatMessages([]);
     localStorage.removeItem("chat_messages");
     addLog("info", "Riwayat percakapan AI dibersihkan.");
@@ -1973,15 +2267,6 @@ export default function App() {
     return [];
   });
 
-  // Logger helper (bounded with maximum 50 entries)
-  const addLog = useCallback((type: "info" | "success" | "warning" | "error", message: string) => {
-    const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
-    setLogs(prev => {
-      const next = [...prev, { timestamp, type, message }];
-      return next.length > 50 ? next.slice(-50) : next;
-    });
-  }, []);
-
   // Fetch API Health status
   const fetchHealth = useCallback(async () => {
     try {
@@ -2095,15 +2380,18 @@ export default function App() {
 
   const [deliveryNotice, setDeliveryNotice] = useState<DeliveryNotice | null>(null);
 
-  // Auto-dismiss delivery notice visual effect after 3.8 seconds
+  // Auto-dismiss delivery notice visual effect after 3.8 seconds & auto-clear sensitive draft
   useEffect(() => {
     if (!deliveryNotice) return;
+    if (deliveryNotice.status === "success") {
+      clearEmailDraftData();
+    }
     const autoDismissTimer = setTimeout(() => {
       setDeliveryNotice(null);
     }, deliveryNotice.status === "success" ? 3800 : 4200);
 
     return () => clearTimeout(autoDismissTimer);
-  }, [deliveryNotice]);
+  }, [deliveryNotice, clearEmailDraftData]);
 
   // Main Email Sender function with real-time visual progress & status feedback
   const sendEmailPacket = async (to: string, subject: string, bodyText: string, isTest = false): Promise<boolean> => {
@@ -2116,7 +2404,11 @@ export default function App() {
     // Generate fresh guaranteed unique reference ID & sync date/time for this transmission
     const uniqueRef = generateUniqueReference(bodyText || subject, now);
     const randomizedBody = synchronizeDynamicFieldsInHtml(bodyText, now, uniqueRef, { refreshRef: true });
-    const inlinedBody = forceInlineStylesToHtml(randomizedBody);
+    
+    // Automatically detect bank in outgoing email and ensure official bank logo is present
+    const detectedBank = detectBankKey(`${subject} ${bodyText}`);
+    const withLogoBody = injectOrUpdateBankLogo(randomizedBody, detectedBank);
+    const inlinedBody = forceInlineStylesToHtml(withLogoBody);
     
     let activeSubject = subject || mailForm.subject || (isTest ? "Ujicoba Koneksi Relay" : "Notifikasi Transaksi Kartu Kredit");
     activeSubject = activeSubject
@@ -2528,6 +2820,7 @@ export default function App() {
       subject: randomizedSubject,
       message: randomizedMessage
     }));
+    skipNextTabDraftClearRef.current = true;
     setTab("send");
     addLog("info", `⚡ [Auto No. Ref & Waktu] Ref baru: ${uniqueRef} | Waktu: ${dt.dateTimeShort}`);
     addLog("info", `Template "${t.name}" diterapkan dengan No. Referensi & Tanggal/Waktu (${dt.dateTimeShort}) terkini.`);
@@ -3242,10 +3535,10 @@ export default function App() {
                 {tab === "send" && (
                   <motion.div
                     key="send-tab"
-                    initial={{ opacity: 0, y: 16 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -10 }}
-                    transition={{ duration: 0.26, ease: [0.22, 1, 0.36, 1] }}
+                    initial={{ opacity: 0, y: 12, filter: "blur(4px)" }}
+                    animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+                    exit={{ opacity: 0, y: -8, filter: "blur(2px)" }}
+                    transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
                     className="p-3 sm:p-5 max-w-4xl mx-auto flex flex-col gap-3 min-h-full justify-start w-[95%] sm:w-full mobile-card-container"
                   >
                     <div className="space-y-3 w-full">
@@ -3675,6 +3968,16 @@ export default function App() {
                                       <span className="text-[10px] font-black text-slate-700 uppercase tracking-wider">
                                         Pratinjau Draf Email
                                       </span>
+                                      {(() => {
+                                        const detectedBank = detectBankKey(`${mailForm.subject} ${mailForm.message}`);
+                                        const cfg = OFFICIAL_BANK_CONFIGS[detectedBank] || OFFICIAL_BANK_CONFIGS.bca;
+                                        return (
+                                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-white text-mandiri-blue-800 border border-slate-200 shadow-2xs">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-mandiri-blue-600 animate-pulse" />
+                                            <span>Logo: {cfg.name}</span>
+                                          </span>
+                                        );
+                                      })()}
                                     </div>
 
                                     {/* Device View Mode Switcher */}
@@ -3864,10 +4167,10 @@ export default function App() {
                 {tab === "templates" && (
                   <motion.div
                     key="templates-tab"
-                    initial={{ opacity: 0, y: 16 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -10 }}
-                    transition={{ duration: 0.26, ease: [0.22, 1, 0.36, 1] }}
+                    initial={{ opacity: 0, y: 12, filter: "blur(4px)" }}
+                    animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+                    exit={{ opacity: 0, y: -8, filter: "blur(2px)" }}
+                    transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
                     className="p-3 sm:p-4 max-w-7xl mx-auto pb-28 w-[95%] sm:w-full mobile-card-container"
                   >
                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-3 px-1">
@@ -4018,10 +4321,10 @@ export default function App() {
                 {tab === "terminal" && (
                   <motion.div
                     key="terminal-tab"
-                    initial={{ opacity: 0, y: 16 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -10 }}
-                    transition={{ duration: 0.26, ease: [0.22, 1, 0.36, 1] }}
+                    initial={{ opacity: 0, y: 12, filter: "blur(4px)" }}
+                    animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+                    exit={{ opacity: 0, y: -8, filter: "blur(2px)" }}
+                    transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
                     className="p-4 max-w-lg mx-auto h-full flex flex-col gap-4 w-[95%] sm:w-full mobile-card-container"
                   >
                     <div className="bg-[#020617] rounded-[24px] border border-slate-800 shadow-2xl flex flex-col h-[70vh] overflow-hidden">
@@ -4082,202 +4385,278 @@ export default function App() {
                   </motion.div>
                 )}
 
-                {/* 2.3.5 Tab AI Chat */}
+                {/* 2.3.5 Tab AI Chat - 1:1 Authentic Claude Mythos Mobile UI */}
                 {tab === "ai" && (
                   <motion.div
                     key="ai-tab"
-                    initial={{ opacity: 0, y: 16 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -10 }}
-                    transition={{ duration: 0.26, ease: [0.22, 1, 0.36, 1] }}
-                    className="flex flex-col flex-1 h-full w-full overflow-hidden p-0 m-0 bg-gradient-to-b from-[#EBF2F9] via-[#F4F7FB] to-white"
+                    initial={{ opacity: 0, y: 12, filter: "blur(4px)" }}
+                    animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+                    exit={{ opacity: 0, y: -8, filter: "blur(2px)" }}
+                    transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+                    className="flex flex-col flex-1 h-full w-full overflow-hidden p-0 m-0 relative"
+                    style={{
+                      background: "linear-gradient(180deg, #FFFFFF 0%, #FAFCFE 35%, #D4EAFD 70%, #A2D5FC 100%)"
+                    }}
                   >
-                    <div className="flex flex-col flex-1 h-full w-full overflow-hidden relative">
-                      {/* Discreet Floating Back Button (No fixed top navigation bar, maximizing vertical chat space) */}
-                      <div className="absolute top-3 left-3 sm:top-4 sm:left-4 z-30 flex items-center gap-2 pointer-events-auto">
+                    {/* Modal Dialog for Custom Cancel Link */}
+                    <AnimatePresence>
+                      {showCancelLinkSettings && (
+                        <motion.div
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={{ opacity: 0 }}
+                          className="fixed inset-0 z-[120] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4"
+                          onClick={() => setShowCancelLinkSettings(false)}
+                        >
+                          <motion.div
+                            initial={{ scale: 0.95, opacity: 0, y: 10 }}
+                            animate={{ scale: 1, opacity: 1, y: 0 }}
+                            exit={{ scale: 0.95, opacity: 0, y: 10 }}
+                            onClick={e => e.stopPropagation()}
+                            className="bg-white rounded-3xl p-5 w-full max-w-sm border border-indigo-100 shadow-2xl space-y-3.5"
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <div className="w-8 h-8 rounded-xl bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-600">
+                                  <LinkIcon className="w-4 h-4" />
+                                </div>
+                                <div>
+                                  <h4 className="text-xs font-black text-slate-900 uppercase tracking-tight">
+                                    Link Tombol Batal
+                                  </h4>
+                                  <p className="text-[10px] text-slate-500 font-semibold">
+                                    Target URL untuk tombol &apos;Batalkan Transaksi&apos;
+                                  </p>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setShowCancelLinkSettings(false)}
+                                className="w-7 h-7 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center cursor-pointer text-xs font-bold"
+                              >
+                                ✕
+                              </button>
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] font-extrabold text-slate-600 uppercase tracking-wider">
+                                URL Tujuan:
+                              </label>
+                              <input
+                                type="url"
+                                value={customCancelLink}
+                                onChange={e => setCustomCancelLink(e.target.value)}
+                                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:bg-white transition-all font-mono"
+                              />
+                              <p className="text-[9.5px] text-slate-500 leading-tight">
+                                * Biarkan kosong untuk menggunakan tautan default bank resmi.
+                              </p>
+                            </div>
+
+                            <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                              {customCancelLink.trim() ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setCustomCancelLink("")}
+                                  className="text-[10px] font-bold text-rose-600 hover:underline cursor-pointer"
+                                >
+                                  Reset Default
+                                </button>
+                              ) : <div />}
+                              <button
+                                type="button"
+                                onClick={() => setShowCancelLinkSettings(false)}
+                                className="px-4 py-2 bg-gradient-to-r from-mandiri-blue-600 to-mandiri-blue-700 hover:from-mandiri-blue-700 hover:to-mandiri-blue-800 text-white rounded-xl text-xs font-black uppercase tracking-tight shadow-md shadow-mandiri-blue-600/20 cursor-pointer active:scale-95 transition-all"
+                              >
+                                Simpan & Tutup
+                              </button>
+                            </div>
+                          </motion.div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
+                    {/* Top Navigation Bar: Hamburger "=", "Pro Mendalam ⌵", New Chat, Avatar */}
+                    <header className="px-5 pt-4 pb-2 flex items-center justify-between z-30 shrink-0 w-full max-w-4xl mx-auto">
+                      {/* Left: 2 Horizontal Bars (Drawer/Menu) */}
+                      <button
+                        type="button"
+                        onClick={() => toggleSidebar()}
+                        className="w-10 h-10 -ml-2 rounded-full hover:bg-black/5 active:scale-95 transition-all cursor-pointer flex flex-col items-center justify-center gap-[4.5px]"
+                        title="Menu Navigasi"
+                      >
+                        <span className="w-4 h-[2px] bg-[#18181b] rounded-full" />
+                        <span className="w-4 h-[2px] bg-[#18181b] rounded-full" />
+                      </button>
+
+                      {/* Center: Model Selector Dropdown ("Pro Mendalam ⌵") */}
+                      <div className="relative">
                         <button
                           type="button"
-                          onClick={() => setTab("send")}
-                          className="p-2 sm:px-3 sm:py-2 rounded-full bg-white/85 hover:bg-white text-slate-700 hover:text-slate-900 border border-slate-200/80 shadow-xs backdrop-blur-md transition-all cursor-pointer flex items-center gap-1.5 text-xs font-semibold active:scale-95 group"
-                          title="Kembali ke Kirim Email"
+                          onClick={() => setShowModelDropdown(prev => !prev)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full hover:bg-black/5 active:scale-98 transition-all cursor-pointer select-none"
                         >
-                          <ChevronLeft className="w-4.5 h-4.5 text-slate-500 group-hover:text-slate-900 transition-colors" />
-                          <span className="hidden sm:inline">Kembali</span>
+                          <span className="text-[16px] sm:text-[17px] font-semibold text-[#18181b] tracking-tight">
+                            {selectedModel}
+                          </span>
+                          <ChevronDown className="w-4 h-4 text-[#52525b] stroke-[2.2]" />
                         </button>
-                        {chatLoading && (
-                          <motion.div
-                            initial={{ opacity: 0, scale: 0.9 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            exit={{ opacity: 0, scale: 0.9 }}
-                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-white/90 text-amber-800 border border-amber-200/80 shadow-xs backdrop-blur-md"
-                          >
-                            <ClaudeLogo className="w-3.5 h-3.5" animated={true} />
-                            <span>Claude memproses...</span>
-                          </motion.div>
-                        )}
-                      </div>
 
-                      {/* Modal Dialog for Custom Cancel Link (Clean & Non-intrusive) */}
-                      <AnimatePresence>
-                        {showCancelLinkSettings && (
-                          <motion.div
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            className="fixed inset-0 z-[120] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4"
-                            onClick={() => setShowCancelLinkSettings(false)}
-                          >
-                            <motion.div
-                              initial={{ scale: 0.95, opacity: 0, y: 10 }}
-                              animate={{ scale: 1, opacity: 1, y: 0 }}
-                              exit={{ scale: 0.95, opacity: 0, y: 10 }}
-                              onClick={e => e.stopPropagation()}
-                              className="bg-white rounded-3xl p-5 w-full max-w-sm border border-indigo-100 shadow-2xl space-y-3.5"
-                            >
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  <div className="w-8 h-8 rounded-xl bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-600">
-                                    <LinkIcon className="w-4 h-4" />
-                                  </div>
-                                  <div>
-                                    <h4 className="text-xs font-black text-slate-900 uppercase tracking-tight">
-                                      Link Tombol Batal
-                                    </h4>
-                                    <p className="text-[10px] text-slate-500 font-semibold">
-                                      Target URL untuk tombol &apos;Batalkan Transaksi&apos;
-                                    </p>
-                                  </div>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => setShowCancelLinkSettings(false)}
-                                  className="w-7 h-7 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center cursor-pointer text-xs font-bold"
-                                >
-                                  ✕
-                                </button>
-                              </div>
-
-                              <div className="space-y-1.5">
-                                <label className="text-[10px] font-extrabold text-slate-600 uppercase tracking-wider">
-                                  URL Tujuan:
-                                </label>
-                                <input
-                                  type="url"
-                                  value={customCancelLink}
-                                  onChange={e => setCustomCancelLink(e.target.value)}
-                                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:bg-white transition-all font-mono"
-                                />
-                                <p className="text-[9.5px] text-slate-500 leading-tight">
-                                  * Biarkan kosong untuk menggunakan tautan default bank resmi.
-                                </p>
-                              </div>
-
-                              <div className="flex items-center justify-between pt-2 border-t border-slate-100">
-                                {customCancelLink.trim() ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => setCustomCancelLink("")}
-                                    className="text-[10px] font-bold text-rose-600 hover:underline cursor-pointer"
-                                  >
-                                    Reset Default
-                                  </button>
-                                ) : <div />}
-                                <button
-                                  type="button"
-                                  onClick={() => setShowCancelLinkSettings(false)}
-                                  className="px-4 py-2 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white rounded-xl text-xs font-black uppercase tracking-tight shadow-md shadow-indigo-500/20 cursor-pointer active:scale-95 transition-all"
-                                >
-                                  Simpan & Tutup
-                                </button>
-                              </div>
-                            </motion.div>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-
-                      {/* Main Chat Conversation List (Spacious, Full-Screen & Responsive) */}
-                      <div className="flex-1 overflow-y-auto px-3 sm:px-6 pt-14 pb-4 space-y-4 max-w-4xl mx-auto w-full">
-                        {/* Empty State Hero - Centered inside scroll area and smoothly exits when chat starts */}
                         <AnimatePresence>
-                          {chatMessages.length === 0 && !chatLoading && (
+                          {showModelDropdown && (
                             <motion.div
-                              key="ai-hero-empty"
-                              initial={{ opacity: 0, y: -8 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              exit={{ opacity: 0, height: 0, overflow: "hidden", marginBottom: 0 }}
-                              transition={{ duration: 0.25, ease: "easeOut" }}
-                              className="pt-8 sm:pt-14 pb-4 px-4 flex flex-col items-center justify-center text-center select-none shrink-0"
+                              initial={{ opacity: 0, y: 6, scale: 0.96 }}
+                              animate={{ opacity: 1, y: 0, scale: 1 }}
+                              exit={{ opacity: 0, y: 6, scale: 0.96 }}
+                              className="absolute top-full mt-2 left-1/2 -translate-x-1/2 w-52 bg-white/95 backdrop-blur-xl rounded-2xl p-1.5 border border-slate-200 shadow-xl z-50 space-y-1"
                             >
-                              <div className="mb-3.5 flex items-center justify-center">
-                                <ClaudeLogo className="w-20 h-20 sm:w-24 sm:h-24 shrink-0" animated={true} />
-                              </div>
-                              <h1 className="font-serif text-2xl sm:text-3xl font-medium text-slate-900 tracking-tight leading-tight">
-                                Claude Mythos
-                              </h1>
-                              <p className="text-xs sm:text-[13px] text-slate-600 mt-2 max-w-sm leading-relaxed px-2 font-normal">
-                                Asisten AI cerdas untuk merancang email transaksi, kartu kredit, mutasi, dan korespondensi perbankan profesional.
-                              </p>
+                              {[
+                                { name: "Pro Mendalam", desc: "Model penalaran mendalam" },
+                                { name: "Claude 3.7 Sonnet", desc: "Cepat & adaptif" },
+                                { name: "Claude 3.5 Haiku", desc: "Kecepatan maksimal" },
+                              ].map((m) => (
+                                <button
+                                  key={m.name}
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedModel(m.name);
+                                    setShowModelDropdown(false);
+                                  }}
+                                  className={cn(
+                                    "w-full px-3 py-2 text-left rounded-xl text-xs font-semibold flex flex-col gap-0.5 transition-colors cursor-pointer",
+                                    selectedModel === m.name ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"
+                                  )}
+                                >
+                                  <span className="font-bold">{m.name}</span>
+                                  <span className="text-[10px] text-slate-400 font-normal">{m.desc}</span>
+                                </button>
+                              ))}
                             </motion.div>
                           )}
                         </AnimatePresence>
+                      </div>
 
+                      {/* Right: New Chat (Pencil in Dotted Circle) & Claude Avatar */}
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={handleClearChat}
+                          className="w-9 h-9 rounded-full hover:bg-black/5 active:scale-95 transition-all cursor-pointer flex items-center justify-center text-[#18181b]"
+                          title="Percakapan Baru"
+                        >
+                          <svg viewBox="0 0 24 24" className="w-[22px] h-[22px]" fill="none" stroke="currentColor">
+                            <circle cx="12" cy="12" r="9.2" strokeWidth="1.6" strokeDasharray="2.5 2.5" strokeLinecap="round" />
+                            <path d="M14.8 6.8l2.4 2.4-7.6 7.6H7.2v-2.4l7.6-7.6z" strokeWidth="1.6" strokeLinejoin="round" />
+                          </svg>
+                        </button>
+                        <div
+                          className="w-9 h-9 rounded-full bg-[#F5EBE6] flex items-center justify-center shrink-0 shadow-2xs select-none overflow-hidden"
+                          title="Profil Claude"
+                        >
+                          <ClaudeLogo className="w-6 h-6 shrink-0" animated={true} />
+                        </div>
+                      </div>
+                    </header>
+
+                    {/* Middle Content Area */}
+                    {chatMessages.length === 0 && !chatLoading ? (
+                      /* 1:1 Authentic Greeting Hero Screen */
+                      <div className="flex-1 flex flex-col items-center justify-center text-center px-4 -mt-10 sm:-mt-14 select-none animate-fadeIn">
+                        {/* Claude Logo (Previous Animated Logo) */}
+                        <div className="mb-4 flex items-center justify-center">
+                          <ClaudeLogo className="w-16 h-16 sm:w-20 sm:h-20 shrink-0" animated={true} />
+                        </div>
+
+                        {/* Title: Claude Mythos */}
+                        <h1 className="font-serif text-[32px] sm:text-[36px] font-medium tracking-tight text-[#141413] leading-none">
+                          Claude Mythos
+                        </h1>
+
+                        {/* Greeting: Halo, saya Claude */}
+                        <h2 className="text-[24px] sm:text-[26px] font-semibold text-[#18181b] tracking-tight mt-6 leading-tight">
+                          Halo, saya Claude
+                        </h2>
+
+                        {/* Subtitle: Ada yang bisa saya bantu? */}
+                        <p className="text-[16px] sm:text-[17px] font-normal text-[#64748b] mt-1.5 leading-relaxed">
+                          Ada yang bisa saya bantu?
+                        </p>
+                      </div>
+                    ) : (
+                      /* Scrollable Active Message Stream */
+                      <div className="flex-1 overflow-y-auto px-3.5 sm:px-6 py-4 space-y-4 max-w-3xl mx-auto w-full no-scrollbar">
                         {chatMessages.map((msg, index) => {
                           const parsed = parseMessageContent(msg.text);
                           return (
                             <motion.div
                               key={`chat-msg-${index}`}
-                              initial={{ opacity: 0, y: 16 }}
+                              initial={{ opacity: 0, y: 14 }}
                               animate={{ opacity: 1, y: 0 }}
-                              transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+                              transition={{ duration: 0.25 }}
                               className={cn(
-                                "flex gap-2.5 max-w-full sm:max-w-[90%] transition-all",
+                                "flex gap-3 max-w-full sm:max-w-[90%] transition-all",
                                 msg.role === "user" ? "ml-auto flex-row-reverse" : "mr-auto"
                               )}
                             >
                               {msg.role !== "user" && (
-                                <div className="shrink-0 self-start mt-0.5 flex items-center justify-center">
+                                <div className="shrink-0 self-start mt-0.5">
                                   <ClaudeLogo className="w-6.5 h-6.5 shrink-0" animated={true} />
                                 </div>
                               )}
-                              <div className="flex flex-col gap-2.5 min-w-0 flex-1">
-                                {parsed.text && (
+                              <div className="flex flex-col gap-2 min-w-0 flex-1">
+                                {parsed.text ? (
                                   msg.text.startsWith("Error:") ? (
-                                    <div className="p-3 sm:p-3.5 rounded-2xl text-xs bg-rose-50 border border-rose-200 text-rose-800 rounded-tl-xs shadow-2xs space-y-2.5">
+                                    <div className="p-3.5 rounded-2xl text-xs bg-rose-50 border border-rose-200 text-rose-800 rounded-tl-xs shadow-xs space-y-2">
                                       <div className="flex items-start gap-2">
                                         <TriangleAlert className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
                                         <div className="flex-1 font-semibold leading-relaxed break-words [overflow-wrap:anywhere]">
                                           {parsed.text.replace(/^Error:\s*/, "")}
                                         </div>
                                       </div>
-                                      <div className="flex items-center gap-2 pt-1.5 border-t border-rose-100">
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            const prevUserMsg = [...chatMessages.slice(0, index)].reverse().find(m => m.role === "user");
-                                            if (prevUserMsg) {
-                                              handleSendChatMessage(undefined, prevUserMsg.text);
-                                            }
-                                          }}
-                                          className="w-full sm:w-auto px-3.5 py-2 min-h-[36px] bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer active:scale-95"
-                                        >
-                                          <RotateCcw className="w-3.5 h-3.5" />
-                                          <span>Coba Kirim Ulang</span>
-                                        </button>
-                                      </div>
                                     </div>
                                   ) : (
                                     <div
                                       className={cn(
-                                        "px-4 py-3 rounded-2xl text-xs leading-relaxed font-semibold break-words [overflow-wrap:anywhere] max-w-full shadow-2xs",
+                                        "px-4 py-2.5 rounded-2xl text-[14px] leading-relaxed break-words [overflow-wrap:anywhere] max-w-full shadow-xs whitespace-pre-wrap",
                                         msg.role === "user"
-                                          ? "bg-gradient-to-r from-mandiri-blue-600 to-mandiri-blue-700 text-white rounded-tr-xs shadow-mandiri-blue-600/15"
-                                          : "bg-white border border-slate-200/90 text-slate-800 rounded-tl-xs"
+                                          ? "bg-[#18181b] text-white rounded-tr-xs"
+                                          : "bg-white/95 border border-slate-200/80 text-[#18181b] rounded-tl-xs backdrop-blur-sm"
                                       )}
                                     >
                                       {parsed.text}
+                                      {isTypingAI && index === chatMessages.length - 1 && msg.role === "model" && (
+                                        <span className="inline-block w-1.5 h-4 ml-1.5 align-middle bg-[#c96442] animate-pulse rounded-xs" />
+                                      )}
+                                    </div>
+                                  )
+                                ) : (
+                                  isTypingAI && index === chatMessages.length - 1 && msg.role === "model" && (
+                                    <div className="px-4 py-2.5 rounded-2xl text-[14px] bg-white/95 border border-slate-200/80 text-[#18181b] rounded-tl-xs backdrop-blur-sm shadow-xs flex items-center gap-2">
+                                      <span className="text-slate-500 text-xs font-medium">Claude sedang mengetik</span>
+                                      <span className="inline-block w-1.5 h-3.5 bg-[#c96442] animate-pulse rounded-xs" />
                                     </div>
                                   )
                                 )}
+
+                                {/* Organic typing progress bar with skip option */}
+                                {isTypingAI && index === chatMessages.length - 1 && msg.role === "model" && (
+                                  <div className="flex items-center justify-between px-1 text-[11px] select-none">
+                                    <div className="flex items-center gap-1.5 text-slate-500 font-medium">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-[#c96442] animate-ping" />
+                                      <span className="text-[11px] text-slate-500">Claude Mythos sedang menulis...</span>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => cancelTypingRef.current?.()}
+                                      className="text-[#c96442] hover:text-[#b05434] font-semibold text-[11px] hover:underline cursor-pointer flex items-center gap-1 py-0.5 px-2 rounded-full hover:bg-white/60 transition-all active:scale-95"
+                                      title="Tampilkan seluruh respon tanpa menunggu"
+                                    >
+                                      <span>Lewati animasi</span>
+                                      <span className="text-[10px]">⏩</span>
+                                    </button>
+                                  </div>
+                                )}
+
                                 {parsed.html && (
                                   <motion.div
                                     initial={{ opacity: 0, y: 8, scale: 0.98 }}
@@ -4285,11 +4664,10 @@ export default function App() {
                                     transition={{ duration: 0.3 }}
                                     className="w-full flex flex-col gap-2.5 my-1"
                                   >
-                                    {/* Clean Subject Bar (Without redundant badges) */}
                                     {parsed.subject && (
-                                      <div className="px-4 py-2.5 rounded-xl bg-white border border-slate-200 flex items-center justify-between gap-3 shadow-2xs">
+                                      <div className="px-4 py-2.5 rounded-xl bg-white border border-slate-200 flex items-center justify-between gap-3 shadow-xs">
                                         <div className="flex items-center gap-2 min-w-0 flex-1">
-                                          <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider shrink-0">
+                                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider shrink-0">
                                             Subjek:
                                           </span>
                                           <span className="text-xs font-bold text-slate-900 break-words [overflow-wrap:anywhere] select-all leading-snug">
@@ -4310,7 +4688,6 @@ export default function App() {
                                       </div>
                                     )}
 
-                                    {/* Spacious Clean HTML Preview Frame */}
                                     <div className="w-full h-[400px] xs:h-[460px] sm:h-[520px] shrink-0 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden ring-1 ring-slate-100">
                                       <iframe
                                         title={`Receipt Preview ${index}`}
@@ -4320,7 +4697,6 @@ export default function App() {
                                       />
                                     </div>
 
-                                    {/* Clean Action Buttons */}
                                     <div className="flex flex-col sm:flex-row gap-2 pt-1">
                                       <button
                                         type="button"
@@ -4328,7 +4704,7 @@ export default function App() {
                                         className="flex-1 py-2.5 px-4 min-h-[42px] bg-gradient-to-r from-mandiri-blue-600 to-mandiri-blue-700 hover:from-mandiri-blue-500 hover:to-mandiri-blue-600 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-md shadow-mandiri-blue-600/20 cursor-pointer flex items-center justify-center gap-2 active:scale-98"
                                       >
                                         <Send className="w-4 h-4 shrink-0" />
-                                        <span>Gunakan Draf & Subjek</span>
+                                        <span>Gunakan Draf di Pengirim Email</span>
                                       </button>
 
                                       <div className="grid grid-cols-3 sm:flex items-center gap-1.5 shrink-0">
@@ -4336,9 +4712,9 @@ export default function App() {
                                           type="button"
                                           onClick={() => handleRandomizeMessageRef(index)}
                                           title="Perbarui No. Referensi & Tanggal/Waktu transaksi mengikuti waktu sekarang"
-                                          className="py-2.5 px-3 min-h-[42px] bg-white hover:bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-700 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs active:scale-95 group"
+                                          className="py-2.5 px-3 min-h-[42px] bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-xs active:scale-95"
                                         >
-                                          <RefreshCw className="w-3.5 h-3.5 text-mandiri-blue-600 group-hover:rotate-180 transition-transform duration-300 shrink-0" />
+                                          <RefreshCw className="w-3.5 h-3.5 text-mandiri-blue-600 shrink-0" />
                                           <span className="truncate">Acak Ref</span>
                                         </button>
 
@@ -4346,10 +4722,10 @@ export default function App() {
                                           type="button"
                                           onClick={() => {
                                             navigator.clipboard.writeText(forceInlineStylesToHtml(parsed.html));
-                                            addLog("info", "Salin kode HTML (Force Inline 1:1) berhasil dilakukan.");
+                                            addLog("info", "Salin kode HTML berhasil dilakukan.");
                                           }}
                                           title="Salin kode HTML"
-                                          className="py-2.5 px-3 min-h-[42px] bg-white hover:bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-700 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs active:scale-95"
+                                          className="py-2.5 px-3 min-h-[42px] bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-xs active:scale-95"
                                         >
                                           <Copy className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                                           <span className="truncate">Salin HTML</span>
@@ -4359,7 +4735,7 @@ export default function App() {
                                           type="button"
                                           onClick={() => handleSaveAIAsTemplate(parsed.html, parsed.subject)}
                                           title="Simpan sebagai template"
-                                          className="py-2.5 px-3 min-h-[42px] bg-white hover:bg-slate-50 border border-slate-200 hover:border-slate-300 text-slate-700 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs active:scale-95"
+                                          className="py-2.5 px-3 min-h-[42px] bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-xs active:scale-95"
                                         >
                                           <Bookmark className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
                                           <span className="truncate">Simpan</span>
@@ -4372,103 +4748,154 @@ export default function App() {
                             </motion.div>
                           );
                         })}
+
                         {chatLoading && (
                           <motion.div
                             key="chat-loading-bubble"
                             initial={{ opacity: 0, y: 12 }}
                             animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, scale: 0.95 }}
-                            transition={{ duration: 0.22, ease: "easeOut" }}
-                            className="flex gap-2.5 max-w-[85%] mr-auto"
+                            className="flex gap-3 max-w-[85%] mr-auto items-center"
                           >
-                            <div className="shrink-0 self-start mt-0.5 flex items-center justify-center">
-                              <ClaudeLogo className="w-6.5 h-6.5 shrink-0" animated={true} />
-                            </div>
-                            <div className="bg-white border border-slate-200 text-slate-500 px-4 py-3 rounded-2xl rounded-tl-xs shadow-2xs flex items-center gap-1.5">
-                              <span className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                              <span className="w-2 h-2 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                            <ClaudeLogo className="w-6 h-6 shrink-0" animated={true} />
+                            <div className="bg-white/95 border border-slate-200 text-slate-500 px-4 py-2.5 rounded-2xl shadow-xs flex items-center gap-1.5">
+                              <span className="w-2 h-2 bg-mandiri-blue-500 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                              <span className="w-2 h-2 bg-amber-500 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
                               <span className="w-2 h-2 bg-cyan-500 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
                             </div>
                           </motion.div>
                         )}
                         <div ref={chatEndRef} />
                       </div>
+                    )}
 
-                      {/* Clean Bank Quick Suggestions */}
-                      {chatMessages.length <= 1 && (
-                        <div className="max-w-4xl mx-auto w-full px-3 sm:px-5 py-2 flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0">
-                          {["BCA", "Mandiri", "BRI", "BNI", "CIMB", "UOB"].map((bank, pIdx) => (
-                            <button
-                              key={pIdx}
-                              type="button"
-                              onClick={() => {
-                                setChatInput(`Buatkan bukti transaksi kartu kredit ${bank} untuk SHOPEE nominal Rp 5.000.000`);
-                              }}
-                              className="shrink-0 text-xs font-semibold border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 px-3 py-1.5 rounded-full transition-all cursor-pointer whitespace-nowrap active:scale-95 shadow-2xs"
+                    {/* Bottom Floating Capsule Input Bar - 1:1 Matching Reference */}
+                    <div className="w-full max-w-xl mx-auto px-4 pb-6 sm:pb-8 pt-2 shrink-0 z-40 safe-area-bottom">
+                      <div className="relative">
+                        {/* Quick Bank Generator & Actions Drawer (toggled by '+') */}
+                        <AnimatePresence>
+                          {showPlusMenu && (
+                            <motion.div
+                              initial={{ opacity: 0, y: 12, scale: 0.95 }}
+                              animate={{ opacity: 1, y: 0, scale: 1 }}
+                              exit={{ opacity: 0, y: 12, scale: 0.95 }}
+                              transition={{ duration: 0.2 }}
+                              className="absolute bottom-full mb-3 left-0 right-0 bg-white/95 backdrop-blur-xl rounded-3xl p-4 border border-white/80 shadow-[0_12px_40px_rgba(20,50,100,0.16)] space-y-3 z-50"
                             >
-                              {bank}
-                            </button>
-                          ))}
-                        </div>
-                      )}
+                              <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+                                <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                                  Generator Cepat Bank (1-Klik)
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setShowCancelLinkSettings(true)}
+                                  className="text-[11px] font-semibold text-mandiri-blue-600 hover:underline flex items-center gap-1 cursor-pointer"
+                                >
+                                  <LinkIcon className="w-3.5 h-3.5" />
+                                  <span>Link Batal</span>
+                                </button>
+                              </div>
+                              <div className="grid grid-cols-3 gap-2">
+                                {[
+                                  { bank: "BCA", scen: "payment" as const, label: "BCA 5 Juta", prompt: "Buatkan bukti transaksi pembayaran kartu kredit BCA Rp 5.000.000" },
+                                  { bank: "Mandiri", scen: "transfer" as const, label: "Mandiri 1.25 Juta", prompt: "Buatkan bukti transfer bank Mandiri Rp 1.250.000" },
+                                  { bank: "BRI", scen: "transfer" as const, label: "BRI 750 Ribu", prompt: "Buatkan bukti transfer BRI nominal Rp 750.000" },
+                                  { bank: "BNI", scen: "refund" as const, label: "BNI 2.1 Juta", prompt: "Buatkan bukti pengembalian dana (refund) BNI Rp 2.100.000" },
+                                  { bank: "CIMB", scen: "topup" as const, label: "CIMB 300 Ribu", prompt: "Buatkan bukti isi saldo top up CIMB Niaga Rp 300.000" },
+                                  { bank: "UOB", scen: "cash_advance" as const, label: "UOB 1 Juta", prompt: "Buatkan bukti tarik tunai kartu kredit UOB Rp 1.000.000" }
+                                ].map((item, idx) => (
+                                  <button
+                                    key={idx}
+                                    type="button"
+                                    onClick={() => {
+                                      setShowPlusMenu(false);
+                                      handleSendChatMessage(undefined, item.prompt);
+                                    }}
+                                    className="p-2.5 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all shadow-xs active:scale-95 text-center flex flex-col items-center justify-center gap-0.5 cursor-pointer"
+                                  >
+                                    <span className="text-mandiri-blue-700 font-extrabold">{item.bank}</span>
+                                    <span className="text-[10px] text-slate-500 font-normal truncate max-w-full">{item.label.replace(/^[A-Z]+\s*/, "")}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
 
-                      {/* Chat Input form */}
-                      <div className="border-t border-slate-200/80 bg-white/95 backdrop-blur-md px-3 sm:px-4 pt-3 pb-3 sm:pb-4 safe-area-bottom shrink-0 shadow-[0_-4px_20px_rgba(0,0,0,0.03)]">
-                        <form onSubmit={handleSendChatMessage} className="max-w-4xl mx-auto flex items-center gap-2">
+                        {/* Floating Capsule Bar */}
+                        <form
+                          onSubmit={handleSendChatMessage}
+                          className="w-full bg-white rounded-full shadow-[0_8px_30px_rgba(25,75,135,0.13)] border border-white/80 px-2 sm:px-2.5 py-1.5 flex items-center gap-1.5 sm:gap-2 transition-all duration-200 focus-within:shadow-[0_12px_36px_rgba(25,75,135,0.18)]"
+                        >
+                          {/* Left: Plus Button */}
                           <button
                             type="button"
-                            onClick={handleClearChat}
-                            title="Bersihkan riwayat percakapan"
-                            className="w-10 h-10 min-w-[40px] rounded-xl bg-slate-50 hover:bg-rose-50 text-slate-400 hover:text-rose-600 border border-slate-200 flex items-center justify-center transition-all cursor-pointer shrink-0 active:scale-95 shadow-2xs"
-                          >
-                            <RotateCcw className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setShowCancelLinkSettings(true)}
-                            title="Konfigurasi URL Tombol Batalkan Transaksi"
+                            onClick={() => setShowPlusMenu(prev => !prev)}
                             className={cn(
-                              "w-10 h-10 min-w-[40px] rounded-xl border flex items-center justify-center transition-all cursor-pointer shrink-0 active:scale-95 shadow-2xs",
-                              customCancelLink.trim()
-                                ? "bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100"
-                                : "bg-slate-50 text-slate-400 border-slate-200 hover:bg-slate-100 hover:text-slate-600"
+                              "w-10 h-10 rounded-full flex items-center justify-center text-[#18181b] hover:bg-slate-100 active:scale-95 transition-all cursor-pointer shrink-0",
+                              showPlusMenu && "bg-slate-100 rotate-45"
                             )}
+                            title="Pilihan Bank & Generator"
                           >
-                            <LinkIcon className="w-4 h-4" />
+                            <Plus className="w-5 h-5 stroke-[2.2]" />
                           </button>
-                          <div className="relative flex-1 flex items-center">
-                            <input
-                              type="text"
-                              placeholder="Ketik permintaan ke Claude Mythos (cth: BCA Shopee Rp 5.000.000)..."
-                              value={chatInput}
-                              onChange={e => setChatInput(e.target.value)}
+
+                          {/* Middle: Input with exact placeholder "Minta Claude..." */}
+                          <input
+                            type="text"
+                            placeholder={isTypingAI ? "Claude sedang mengetik respons..." : "Minta Claude..."}
+                            value={chatInput}
+                            onChange={e => setChatInput(e.target.value)}
+                            disabled={chatLoading || isTypingAI}
+                            className="flex-1 bg-transparent border-0 outline-none text-[15px] sm:text-[16px] font-normal text-[#18181b] placeholder:text-[#8e8e93] px-1 py-2 min-w-0"
+                          />
+
+                          {/* Microphone Button */}
+                          <button
+                            type="button"
+                            onClick={handleToggleSpeechToText}
+                            disabled={chatLoading || isTypingAI}
+                            className={cn(
+                              "w-10 h-10 rounded-full flex items-center justify-center transition-all cursor-pointer shrink-0 active:scale-95",
+                              isListening ? "bg-rose-500 text-white animate-pulse" : "text-[#18181b] hover:bg-slate-100",
+                              (chatLoading || isTypingAI) && "opacity-40 cursor-not-allowed"
+                            )}
+                            title={isListening ? "Mendengarkan..." : "Input Suara (Microphone)"}
+                          >
+                            <Mic className="w-5 h-5 stroke-[2]" />
+                          </button>
+
+                          {/* Audio Wave / Submit / Stop Button */}
+                          {isTypingAI ? (
+                            <button
+                              type="button"
+                              onClick={() => cancelTypingRef.current?.()}
+                              className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-[#18181b] hover:bg-[#27272a] text-white flex items-center justify-center transition-all cursor-pointer shrink-0 shadow-sm active:scale-95"
+                              title="Tampilkan langsung (Lewati animasi)"
+                            >
+                              <span className="w-3.5 h-3.5 bg-white rounded-xs" />
+                            </button>
+                          ) : chatInput.trim() ? (
+                            <button
+                              type="submit"
                               disabled={chatLoading}
-                              className="w-full px-4 py-3 pr-10 min-h-[44px] bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-amber-300 focus:bg-white focus:border-amber-500 transition-all text-slate-800 disabled:opacity-50"
-                            />
-                            {chatInput && (
-                              <button
-                                type="button"
-                                onClick={() => setChatInput("")}
-                                className="absolute right-2.5 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center rounded-full bg-slate-200 hover:bg-slate-300 text-slate-600 hover:text-slate-900 transition-colors cursor-pointer"
-                                title="Kosongkan chat input"
-                              >
-                                <X className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </div>
-                          <button
-                            type="submit"
-                            disabled={!chatInput.trim() || chatLoading}
-                            className={cn(
-                              "w-11 h-11 min-w-[44px] rounded-xl flex items-center justify-center transition-all cursor-pointer shadow-xs active:scale-90 shrink-0",
-                              chatInput.trim() && !chatLoading
-                                ? "bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-700 hover:to-amber-800 text-white shadow-amber-600/20"
-                                : "bg-slate-100 text-slate-300 cursor-not-allowed"
-                            )}
-                            title="Kirim pesan"
-                          >
-                            <Send className="w-4 h-4" />
-                          </button>
+                              className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-[#18181b] hover:bg-[#27272a] text-white flex items-center justify-center transition-all cursor-pointer shrink-0 shadow-sm active:scale-95"
+                              title="Kirim pesan"
+                            >
+                              <ArrowUp className="w-5 h-5 stroke-[2.5]" />
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleSendChatMessage(undefined, "Buatkan notifikasi transaksi kartu kredit BCA Rp 5.000.000")}
+                              className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-[#d6ecfe] hover:bg-[#c6e4fd] transition-all flex items-center justify-center gap-[3px] shrink-0 cursor-pointer shadow-2xs active:scale-95"
+                              title="Mode Suara"
+                            >
+                              <span className="w-[2.2px] h-[9px] bg-[#0f172a] rounded-full" />
+                              <span className="w-[2.2px] h-[17px] bg-[#0f172a] rounded-full" />
+                              <span className="w-[2.2px] h-[13px] bg-[#0f172a] rounded-full" />
+                              <span className="w-[2.2px] h-[7px] bg-[#0f172a] rounded-full" />
+                            </button>
+                          )}
                         </form>
                       </div>
                     </div>
@@ -4479,10 +4906,10 @@ export default function App() {
                 {tab === "accounts" && (
                   <motion.div
                     key="accounts-tab"
-                    initial={{ opacity: 0, y: 16 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -10 }}
-                    transition={{ duration: 0.26, ease: [0.22, 1, 0.36, 1] }}
+                    initial={{ opacity: 0, y: 12, filter: "blur(4px)" }}
+                    animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+                    exit={{ opacity: 0, y: -8, filter: "blur(2px)" }}
+                    transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
                     className="p-3 sm:p-4 max-w-lg mx-auto pb-28 w-[95%] sm:w-full mobile-card-container"
                   >
                     {/* Header */}

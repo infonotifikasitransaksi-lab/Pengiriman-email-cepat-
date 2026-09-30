@@ -1,3 +1,5 @@
+import { injectOrUpdateBankLogo } from "../utils/bankDetector";
+
 // Web Worker for asynchronous background processing of heavy HTML email templates,
 // regex replacement, force-inline CSS parsing, dynamic timestamp calculation, and reference synchronization.
 
@@ -376,6 +378,10 @@ function parseMessageContent(rawText: string) {
     html = html.replace(/\[NO_REFERENSI\]/g, generatedRef);
   }
 
+  if (html) {
+    html = injectOrUpdateBankLogo(html);
+  }
+
   if (html && text) {
     text = text
       .replace(/(?:📌\s*)?(?:\*\*|__)?\s*(?:Subjek|Subject)(?:\s*Rekomendasi|\s*Email)?\s*(?:\*\*|__)?\s*:\s*[`"']?[^\n`"'\*]+[`"']?/gi, "")
@@ -438,6 +444,7 @@ function synchronizeDynamicFieldsInHtml(
     res = res.replace(/\[(?:NOMINAL|JUMLAH)\]/gi, options.nominal);
   }
 
+  res = injectOrUpdateBankLogo(res);
   return fallbackRegexForceInline(res);
 }
 
