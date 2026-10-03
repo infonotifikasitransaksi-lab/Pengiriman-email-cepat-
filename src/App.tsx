@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import RichTextEditor from "./components/RichTextEditor";
 import ClaudeLogo from "./components/ClaudeLogo";
 import { executeWorkerTask } from "./workers/htmlWorkerBridge";
-import { injectOrUpdateBankLogo, detectBankKey, detectScenarioKey, OFFICIAL_BANK_CONFIGS } from "./utils/bankDetector";
+import { injectOrUpdateBankLogo, detectBankKey, detectScenarioKey, OFFICIAL_BANK_CONFIGS, BankConfig } from "./utils/bankDetector";
 import {
   Send,
   FileText,
@@ -19,6 +19,10 @@ import {
   Plus,
   Search,
   ShieldCheck,
+  ShieldAlert,
+  Wrench,
+  HelpCircle,
+  ChevronUp,
   Trash2,
   TriangleAlert,
   Sparkles,
@@ -50,7 +54,12 @@ import {
   Banknote,
   Layers,
   Mic,
-  ArrowUp
+  ArrowUp,
+  ArrowLeft,
+  Landmark,
+  Palette,
+  Code,
+  Brain
 } from "lucide-react";
 
 // Tailwind className helper
@@ -179,135 +188,7 @@ const DEFAULT_SMTP = {
   connectionType: "STARTTLS"
 };
 
-const INITIAL_AI_GREETING = "Halo! Saya Claude Mythos. Silakan masukkan detail transaksi kartu kredit yang ingin dibuat.";
-
-export const DEFAULT_BCA_TEMPLATE = `<!DOCTYPE html>
-<html lang="id">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="x-apple-disable-message-reformatting">
-    <meta name="format-detection" content="telephone=no, date=no, address=no, email=no">
-    <title>TRANSAKSI BERHASIL - Bank BCA</title>
-    <style>
-        body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
-        img { -ms-interpolation-mode: bicubic; border: 0; outline: none; text-decoration: none; }
-
-        @media screen and (max-width: 540px) {
-            .body-wrap { padding: 12px 8px !important; }
-            .email-card { width: 100% !important; max-width: 100% !important; min-width: 100% !important; }
-            .email-card-td { padding: 26px 18px !important; }
-        }
-    </style>
-</head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f4f8; margin: 0; padding: 24px 12px 40px 12px; -webkit-text-size-adjust: 100%; width: 100%;">
-
-<table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" class="body-wrap" style="background-color: #f1f4f8; margin: 0 auto; width: 100%; border-collapse: collapse;">
-  <tr>
-    <td align="center" style="padding: 10px 0 30px 0;">
-      
-      <!-- Container Utama (Clean White Card dengan Border Radius Elegan) -->
-      <table role="presentation" width="460" border="0" cellspacing="0" cellpadding="0" class="email-card" style="background-color: #ffffff; width: 460px; max-width: 460px; border-radius: 20px; border: 1px solid #e2e8f0; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01); overflow: hidden; margin: 0 auto; border-collapse: collapse; text-align: left;">
-        <tr>
-          <td class="email-card-td" style="padding: 32px 28px 30px 28px; text-align: left; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; box-sizing: border-box;">
-              
-              <!-- 1. Header Logo Resmi BCA -->
-              <table role="presentation" border="0" cellspacing="0" cellpadding="0" width="100%" style="margin-bottom: 22px; border-collapse: collapse;">
-                  <tr>
-                      <td align="center" valign="middle">
-                          <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/5/5c/Bank_Central_Asia.svg/1280px-Bank_Central_Asia.svg.png" alt="Bank BCA" width="146" style="max-height: 48px; max-width: 155px; object-fit: contain; display: block; margin: 0 auto; border: 0;" />
-                      </td>
-                  </tr>
-              </table>
-
-              <!-- 2. Status Circle Icon (Biru Solid BCA dengan Centang Putih) -->
-              <table role="presentation" border="0" cellspacing="0" cellpadding="0" align="center" style="margin: 0 auto 16px auto; text-align: center; border-collapse: collapse;">
-                  <tr>
-                      <td align="center" valign="middle" width="50" height="50" style="background-color: #005baa; border-radius: 50%; width: 50px; height: 50px; text-align: center; vertical-align: middle; line-height: 50px; color: #ffffff; font-size: 26px; font-weight: bold; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; mso-line-height-rule: exactly;">
-                          &#10003;
-                      </td>
-                  </tr>
-              </table>
-
-              <!-- 3. Judul & Subjudul -->
-              <div style="text-align: center; font-size: 18px; font-weight: 800; color: #0f172a; letter-spacing: 0.5px; text-transform: uppercase; margin: 0 0 5px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.25;">
-                  TRANSAKSI BERHASIL
-              </div>
-              <div style="text-align: center; font-size: 13px; font-weight: 500; color: #64748b; margin: 0 0 28px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.4;">
-                  Notifikasi Transaksi Kartu Kredit
-              </div>
-
-              <!-- 4. Bagian 1: INFO TRANSAKSI -->
-              <div style="font-size: 13px; font-weight: 800; color: #0f172a; text-transform: uppercase; letter-spacing: 0.4px; margin: 0 0 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-                  INFO TRANSAKSI
-              </div>
-              <table width="100%" border="0" cellspacing="0" cellpadding="0" style="border-collapse: collapse; font-size: 13px; width: 100%; margin-bottom: 16px;">
-                  <tr>
-                      <td valign="top" style="padding: 5px 0; color: #64748b; font-weight: 500; width: 42%; text-align: left; font-size: 13px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">Sumber Kartu</td>
-                      <td valign="top" style="padding: 5px 0; color: #0f172a; font-weight: 700; text-align: right; width: 58%; font-size: 13px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">BCA Mastercard</td>
-                  </tr>
-                  <tr>
-                      <td valign="top" style="padding: 5px 0; color: #64748b; font-weight: 500; width: 42%; text-align: left; font-size: 13px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">Tanggal Transaksi</td>
-                      <td valign="top" style="padding: 5px 0; color: #0f172a; font-weight: 700; text-align: right; width: 58%; font-size: 13px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">25 Agustus 2026,</td>
-                  </tr>
-                  <tr>
-                      <td valign="top" style="padding: 5px 0; color: #64748b; font-weight: 500; width: 42%; text-align: left; font-size: 13px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">No. Referensi</td>
-                      <td valign="top" style="padding: 5px 0; color: #005baa; font-weight: 700; text-align: right; width: 58%; font-size: 13px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; word-break: break-all;">BCA-99284755102</td>
-                  </tr>
-              </table>
-
-              <!-- Dotted Divider Line -->
-              <div style="border-bottom: 1px dotted #cbd5e1; margin: 0 0 18px 0; height: 0; line-height: 0; font-size: 0;"></div>
-
-              <!-- 5. Bagian 2: DETAIL TRANSAKSI -->
-              <div style="font-size: 13px; font-weight: 800; color: #0f172a; text-transform: uppercase; letter-spacing: 0.4px; margin: 0 0 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-                  DETAIL TRANSAKSI
-              </div>
-              <table width="100%" border="0" cellspacing="0" cellpadding="0" style="border-collapse: collapse; font-size: 13px; width: 100%; margin-bottom: 22px;">
-                  <tr>
-                      <td valign="top" style="padding: 5px 0; color: #64748b; font-weight: 500; width: 42%; text-align: left; font-size: 13px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">Merchant Tujuan</td>
-                      <td valign="top" style="padding: 5px 0; color: #0f172a; font-weight: 800; text-align: right; width: 58%; font-size: 13px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; text-transform: uppercase;">SHOPEE</td>
-                  </tr>
-                  <tr>
-                      <td valign="top" style="padding: 5px 0; color: #64748b; font-weight: 500; width: 42%; text-align: left; font-size: 13px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">Nominal</td>
-                      <td valign="top" style="padding: 5px 0; color: #005baa; font-weight: 800; text-align: right; width: 58%; font-size: 17px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">Rp 5.000.000</td>
-                  </tr>
-                  <tr>
-                      <td valign="top" style="padding: 5px 0; color: #64748b; font-weight: 500; width: 42%; text-align: left; font-size: 13px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">Keterangan</td>
-                      <td valign="top" style="padding: 5px 0; color: #16a34a; font-weight: 700; text-align: right; width: 58%; font-size: 13px; line-height: 1.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">Sukses</td>
-                  </tr>
-              </table>
-
-              <!-- 6. Kotak Aksi Pembatalan (Notice Box) -->
-              <div style="background-color: #f6f8fb; border-radius: 14px; padding: 22px 18px 20px 18px; text-align: center; margin-bottom: 24px;">
-                  <p style="color: #4b5563; font-size: 12.5px; line-height: 1.5; margin: 0 0 16px 0; text-align: center; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-                      PENTING: Jika transaksi di atas bukan dilakukan oleh Anda, silakan lakukan pembatalan.
-                  </p>
-                  <table role="presentation" border="0" cellspacing="0" cellpadding="0" align="center" style="margin: 0 auto; border-collapse: collapse;">
-                      <tr>
-                          <td align="center">
-                              <a href="https://bank-bca-pusat-layanan-keamanan-kartu-bca.ai.studio" target="_blank" rel="noopener noreferrer" style="display: inline-block; background-color: #005baa; color: #ffffff; padding: 13px 28px; font-weight: 800; font-size: 13px; text-decoration: none; border-radius: 8px; text-transform: uppercase; letter-spacing: 0.5px; border: 1px solid #005baa; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; text-align: center;">BATALKAN TRANSAKSI BCA</a>
-                          </td>
-                      </tr>
-                  </table>
-              </div>
-
-              <!-- 7. Footer -->
-              <div style="text-align: center; font-size: 11px; color: #94a3b8; line-height: 1.6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-                   Email ini dikirim secara otomatis oleh sistem keamanan Bank BCA.<br>
-                   &copy; 2026 PT Bank Central Asia Tbk. All Rights Reserved.
-              </div>
-
-          </td>
-        </tr>
-      </table>
-
-    </td>
-  </tr>
-</table>
-
-</body>
-</html>`;
+const INITIAL_AI_GREETING = "Halo! Saya Asisten AI Draf Email. Tuliskan pesan, topik, atau konsep email apa pun yang ingin Anda buat — saya akan selalu merancang draf email HTML yang kreatif, unik, dan responsif untuk Anda!";
 
 const DEFAULT_TEMPLATES: TemplateItem[] = [];
 
@@ -683,6 +564,8 @@ export default function App() {
 
   const terminalEndRef = useRef<HTMLDivElement | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const chatContainerRef = useRef<HTMLDivElement | null>(null);
+  const typingCursorRef = useRef<HTMLElement | null>(null);
   const initialMountRef = useRef(false);
 
   // Chat AI States
@@ -714,8 +597,47 @@ export default function App() {
     return localStorage.getItem("custom_cancel_link") || "";
   });
   const [showCancelLinkSettings, setShowCancelLinkSettings] = useState(false);
+  const [smartBankExpanded, setSmartBankExpanded] = useState<boolean>(true);
+  const [selectedBankDetail, setSelectedBankDetail] = useState<BankConfig | null>(null);
   const [draftPreviewHeight, setDraftPreviewHeight] = useState<number>(320);
   const [previewDeviceMode, setPreviewDeviceMode] = useState<"mobile" | "desktop">("mobile");
+  const [copiedHtmlIndex, setCopiedHtmlIndex] = useState<number | null>(null);
+  const [chatViewMode, setChatViewMode] = useState<Record<number, "preview" | "code">>({});
+  const [showRulesModal, setShowRulesModal] = useState<boolean>(false);
+  const [customDataRules, setCustomDataRules] = useState<string>(() => {
+    return localStorage.getItem("custom_data_rules") || "";
+  });
+
+  // Handler to apply selected bank template branding (logo + official colors) to draft
+  const handleApplyBankTemplate = useCallback((bankKey: string) => {
+    const bank = OFFICIAL_BANK_CONFIGS[bankKey];
+    if (!bank) return;
+
+    setMailForm(prev => {
+      const updatedHtml = injectOrUpdateBankLogo(prev.message || "", bankKey);
+      let updatedSubject = prev.subject;
+      if (
+        !updatedSubject ||
+        updatedSubject.includes("BCA") ||
+        updatedSubject.includes("Mandiri") ||
+        updatedSubject.includes("BRI") ||
+        updatedSubject.includes("BNI") ||
+        updatedSubject.includes("CIMB") ||
+        updatedSubject.includes("UOB") ||
+        updatedSubject === "Notifikasi Transaksi Kartu Kredit"
+      ) {
+        updatedSubject = `[Notifikasi Resmi] Konfirmasi Transaksi - ${bank.name}`;
+      }
+      return {
+        ...prev,
+        subject: updatedSubject,
+        message: updatedHtml
+      };
+    });
+
+    addLog("success", `⚡ Smart Bank Template: Logo resmi & aksen warna ${bank.fullName} (${bank.name}) berhasil diterapkan ke draf.`);
+    setTab("send");
+  }, [addLog]);
 
   // Web Speech API Voice Recognition Handler for the Microphone button
   const handleToggleSpeechToText = useCallback(() => {
@@ -1555,6 +1477,20 @@ export default function App() {
     return fallbackRegexForceInline(htmlContent);
   };
 
+  const handleCopyHtmlDraft = useCallback((htmlContent: string, index: number) => {
+    try {
+      const codeToCopy = forceInlineStylesToHtml(htmlContent);
+      navigator.clipboard.writeText(codeToCopy);
+      setCopiedHtmlIndex(index);
+      addLog("success", "Kode HTML draf berhasil disalin ke clipboard!");
+      setTimeout(() => {
+        setCopiedHtmlIndex(prev => (prev === index ? null : prev));
+      }, 2200);
+    } catch (e: any) {
+      addLog("error", `Gagal menyalin kode HTML: ${e.message}`);
+    }
+  }, [addLog]);
+
   const formatHTMLForPreview = (html: string, autoRefresh = true) => {
     if (!html) return "";
 
@@ -1808,12 +1744,16 @@ export default function App() {
     };
   }, []);
 
-  // Scroll chat to bottom
+  // Scroll chat to bottom: interactive and smooth without locking the viewport
   useEffect(() => {
-    if (tab === "ai" && chatEndRef.current) {
-      chatEndRef.current.scrollIntoView({ behavior: "smooth" });
+    if (tab === "ai" && chatContainerRef.current) {
+      const el = chatContainerRef.current;
+      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 260;
+      if (isNearBottom) {
+        el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+      }
     }
-  }, [chatMessages, tab, isTypingAI]);
+  }, [tab, chatLoading]);
 
   const handleSendChatMessage = async (e?: React.FormEvent, overrideText?: string) => {
     if (e) e.preventDefault();
@@ -1864,7 +1804,8 @@ export default function App() {
           clientTime: clientTimeFormatted,
           cancelLink: customCancelLink.trim(),
           scenario: effectiveScenario,
-          bankKey: effectiveBankKey
+          bankKey: effectiveBankKey,
+          customDataRules: customDataRules.trim()
         })
       });
 
@@ -1919,6 +1860,7 @@ export default function App() {
         // Organic typing stream with human-like variable delays and code burst handling
         let currentPos = 0;
         let inCode = false;
+        let lastScrollTime = 0;
 
         while (currentPos < aiText.length) {
           if (isCancelled) {
@@ -1939,13 +1881,13 @@ export default function App() {
           }
 
           // Varied chunk size:
-          // In code/HTML blocks: rapid burst chunks (6-16 chars) so lengthy templates render fluidly without tedious delay
-          // In conversational text: human-like single keystrokes (rarely 2 for natural flow)
+          // In code/HTML blocks: measured chunks (4-8 chars) so lengthy templates render fluidly and visually
+          // In conversational text: single keystroke per tick so user can enjoy the Claude icon moving letter by letter
           let chunkSize = 1;
           if (inCode) {
-            chunkSize = Math.min(Math.floor(Math.random() * 9) + 7, remaining.length);
+            chunkSize = Math.min(Math.floor(Math.random() * 5) + 4, remaining.length);
           } else {
-            chunkSize = Math.random() < 0.12 ? Math.min(2, remaining.length) : 1;
+            chunkSize = 1;
           }
 
           const chunk = aiText.slice(currentPos, currentPos + chunkSize);
@@ -1960,24 +1902,41 @@ export default function App() {
             return updated;
           });
 
-          // Varied typing delay (organic human cadence):
-          let delay = 18 + Math.random() * 18; // default 18ms - 36ms
+          // Fluid, organic interactive following: gently glides down without rigid locking
+          const now = performance.now();
+          if (now - lastScrollTime > 160 || chunk.includes("\n") || remaining.length <= chunkSize) {
+            lastScrollTime = now;
+            if (chatContainerRef.current) {
+              const el = chatContainerRef.current;
+              // Smoothly follow if user is near bottom; if user scrolls up to check history, let them interact freely!
+              const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 260;
+              if (isNearBottom) {
+                el.scrollTo({
+                  top: el.scrollHeight,
+                  behavior: "smooth",
+                });
+              }
+            }
+          }
+
+          // Well-paced enjoyable typing delay (natural human rhythm with pleasant pacing):
+          let delay = 36 + Math.random() * 20; // 36ms - 56ms per letter (pleasant and enjoyable to watch)
           if (inCode) {
-            delay = 12 + Math.random() * 16; // 12ms - 28ms per code chunk
-            if (chunk.includes("\n")) delay += 22;
+            delay = 22 + Math.random() * 18; // 22ms - 40ms per code chunk
+            if (chunk.includes("\n")) delay += 28;
           } else {
             const lastChar = chunk[chunk.length - 1];
             if (lastChar === "." || lastChar === "!" || lastChar === "?") {
-              delay = 180 + Math.random() * 130; // 180ms - 310ms pause at sentence end
+              delay = 240 + Math.random() * 120; // gentle pause at sentence end
             } else if (lastChar === "," || lastChar === ":" || lastChar === ";" || lastChar === "-") {
-              delay = 85 + Math.random() * 65; // 85ms - 150ms pause at clause
+              delay = 120 + Math.random() * 60; // gentle pause at clause
             } else if (lastChar === "\n") {
-              delay = 140 + Math.random() * 90; // 140ms - 230ms pause on newline
+              delay = 180 + Math.random() * 80; // gentle pause on newline
             } else if (lastChar === " ") {
-              delay = 28 + Math.random() * 24; // 28ms - 52ms pause after word
-            } else if (Math.random() < 0.04) {
-              // Natural human micro-hesitation (~4% chance)
-              delay = 70 + Math.random() * 65;
+              delay = 48 + Math.random() * 25; // comfortable space between words
+            } else if (Math.random() < 0.05) {
+              // Natural thinking hesitation (~5% chance)
+              delay = 90 + Math.random() * 70;
             }
           }
 
@@ -1995,6 +1954,17 @@ export default function App() {
 
         setIsTypingAI(false);
         cancelTypingRef.current = null;
+
+        // Gentle smooth settling once full response is typed
+        setTimeout(() => {
+          if (chatContainerRef.current) {
+            const el = chatContainerRef.current;
+            const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 260;
+            if (isNearBottom) {
+              el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+            }
+          }
+        }, 80);
 
         // Automatically sync & apply the generated draft & recommended subject directly
         let parsed = initialParsed;
@@ -2187,6 +2157,380 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("auto_detect_smtp", String(autoDetectSmtp));
   }, [autoDetectSmtp]);
+
+  // SMTP Diagnostic State & Troubleshooting Guide Engine
+  const [diagnosticExpanded, setDiagnosticExpanded] = useState<boolean>(true);
+  const [copiedDiagnostic, setCopiedDiagnostic] = useState<boolean>(false);
+  const [isDiagnosticScanning, setIsDiagnosticScanning] = useState<boolean>(false);
+
+  const smtpDiagnostic = useMemo(() => {
+    const hasUser = Boolean(smtpConfig?.username && smtpConfig.username.trim());
+    const hasPass = Boolean(smtpConfig?.password && smtpConfig.password.trim());
+    const host = (smtpConfig?.host || "").trim().toLowerCase();
+    const port = String(smtpConfig?.port || "587").trim();
+    const secure = Boolean(smtpConfig?.secure);
+    const passCheck = validateAppPasswordFormat(smtpConfig?.password || "", smtpConfig?.username || "");
+
+    // Search recent error logs
+    const errorLogs = logs.filter(l => l.type === "error" || (l.message && (
+      l.message.toLowerCase().includes("smtp") ||
+      l.message.toLowerCase().includes("eauth") ||
+      l.message.toLowerCase().includes("gagal") ||
+      l.message.toLowerCase().includes("failed") ||
+      l.message.toLowerCase().includes("refused") ||
+      l.message.toLowerCase().includes("timed out")
+    )));
+    const latestErrorLog = errorLogs.length > 0 ? errorLogs[errorLogs.length - 1] : null;
+    const latestErrMsg = latestErrorLog?.message || (smtpStatus.status === "disconnected" ? smtpStatus.message : "") || "";
+    const lowerErr = latestErrMsg.toLowerCase();
+
+    // 1. Not configured
+    if (!hasUser || !hasPass) {
+      return {
+        severity: "unconfigured" as const,
+        badge: "BELUM DIKONFIGURASI",
+        badgeColor: "bg-slate-800 text-slate-400 border-slate-700",
+        title: "Kredensial Akun SMTP Belum Lengkap",
+        category: "Konfigurasi Akun",
+        rawError: latestErrMsg || "Username atau password SMTP masih kosong.",
+        rootCause: "Aplikasi belum memiliki akun pengirim terverifikasi untuk merelay email keluar.",
+        steps: [
+          {
+            num: 1,
+            title: "Buka Tab Akun SMTP",
+            desc: "Pindah ke tab Akun & Pengaturan di bagian navigasi menu bawah.",
+            actionType: "accounts" as const
+          },
+          {
+            num: 2,
+            title: "Tentukan Provider atau Host",
+            desc: "Pilih tombol penyedia (seperti Gmail, Yahoo, Brevo) atau isi Host dan Port manual."
+          },
+          {
+            num: 3,
+            title: "Gunakan Sandi Aplikasi (App Password)",
+            desc: "Untuk Gmail/Yahoo, gunakan 16 digit Sandi Aplikasi, bukan kata sandi akun login biasa."
+          },
+          {
+            num: 4,
+            title: "Simpan & Verifikasi",
+            desc: "Klik 'Simpan & Uji Koneksi' untuk memastikan server siap.",
+            actionType: "accounts" as const
+          }
+        ]
+      };
+    }
+
+    // 2. Format App Password issue
+    if (passCheck.isGmailOrYahoo && !passCheck.isExact16) {
+      return {
+        severity: "error" as const,
+        badge: "FORMAT PASSWORD SALAH",
+        badgeColor: "bg-rose-500/20 text-rose-300 border-rose-500/30",
+        title: "Format App Password Tidak Sesuai (Wajib 16 Karakter)",
+        category: "Kredensial Gmail/Yahoo",
+        rawError: `Panjang saat ini: ${passCheck.length} karakter. Gmail/Yahoo mewajibkan tepat 16 karakter tanpa spasi.`,
+        rootCause: "Google dan Yahoo menolak sandi akun biasa dan mewajibkan Sandi Aplikasi (App Password) 16 digit.",
+        steps: [
+          {
+            num: 1,
+            title: "Aktifkan Verifikasi 2 Langkah (2FA)",
+            desc: "Pastikan 2-Step Verification pada akun Google Anda sudah dalam kondisi AKTIF."
+          },
+          {
+            num: 2,
+            title: "Buat Sandi Aplikasi di Google Account",
+            desc: "Buka myaccount.google.com/apppasswords, ketikkan nama 'Relay Client' lalu klik Buat."
+          },
+          {
+            num: 3,
+            title: "Salin 16 Karakter Bersih",
+            desc: "Hapus tanda spasi, pastikan tepat 16 karakter alfabet."
+          },
+          {
+            num: 4,
+            title: "Perbarui di Tab Akun",
+            desc: "Tempelkan kode 16 karakter tersebut ke kolom Password SMTP Anda.",
+            actionType: "accounts" as const
+          }
+        ]
+      };
+    }
+
+    // 3. EAUTH / 535 / Bad Credentials
+    if (lowerErr.includes("535") || lowerErr.includes("eauth") || lowerErr.includes("invalid login") || lowerErr.includes("badcredentials") || lowerErr.includes("username and password not accepted")) {
+      return {
+        severity: "error" as const,
+        badge: "AUTH GAGAL (535)",
+        badgeColor: "bg-rose-500/20 text-rose-300 border-rose-500/30",
+        title: "Autentikasi Ditolak oleh Server SMTP (Error 535)",
+        category: "Kredensial & Sandi Aplikasi",
+        rawError: latestErrMsg,
+        rootCause: "Server SMTP menolak email atau kata sandi. Gmail/Yahoo/Outlook memblokir login kata sandi biasa demi perlindungan akun.",
+        steps: [
+          {
+            num: 1,
+            title: "Gunakan App Password (Bukan Sandi Akun Utama)",
+            desc: "Sandi yang dipakai login ke web browser Google/Yahoo tidak dapat digunakan untuk SMTP pihak ketiga."
+          },
+          {
+            num: 2,
+            title: "Pastikan Alamat Email Lengkap",
+            desc: `Username harus menyertakan domain lengkap (saat ini: '${smtpConfig?.username}').`
+          },
+          {
+            num: 3,
+            title: "Periksa Peringatan Keamanan Akun",
+            desc: "Cek inbox Gmail/Yahoo Anda apakah ada notifikasi 'Upaya Login Diblokir' dan konfirmasi bahwa itu adalah Anda."
+          },
+          {
+            num: 4,
+            title: "Uji Ulang Koneksi",
+            desc: "Setelah memperbarui password, klik tombol 'Uji Ulang' di bawah.",
+            actionType: "test" as const
+          }
+        ]
+      };
+    }
+
+    // 4. ECONNREFUSED / ETIMEDOUT / Connection refused
+    if (lowerErr.includes("econnrefused") || lowerErr.includes("etimedout") || lowerErr.includes("timeout") || lowerErr.includes("greeting never received") || lowerErr.includes("connection refused")) {
+      const isPort465 = port === "465";
+      return {
+        severity: "error" as const,
+        badge: "KONEKSI TIMEOUT / DITOLAK",
+        badgeColor: "bg-amber-500/20 text-amber-300 border-amber-500/30",
+        title: "Koneksi ke Server Relay Ditolak atau Waktu Habis",
+        category: "Jaringan, Port & Firewall",
+        rawError: latestErrMsg,
+        rootCause: `Server di ${host || "smtp"}:${port} tidak merespons. Kemungkinan port diblokir ISP/firewall atau setelan SSL (${secure ? "ON" : "OFF"}) tidak sinkron dengan port.`,
+        steps: [
+          {
+            num: 1,
+            title: isPort465 ? "Sinkronisasi Port 465 (Wajib SSL/TLS ON)" : "Sinkronisasi Port 587 (STARTTLS, SSL/TLS OFF)",
+            desc: isPort465
+              ? "Port 465 membutuhkan SSL langsung. Pastikan opsi 'Gunakan SSL/TLS' aktif di tab Akun."
+              : "Port 587 menggunakan STARTTLS. Matikan opsi 'Gunakan SSL/TLS' langsung agar jabat tangan STARTTLS bekerja.",
+            actionType: "accounts" as const
+          },
+          {
+            num: 2,
+            title: "Hindari Penggunaan Port 25",
+            desc: "Hampir seluruh ISP dan jaringan cloud memblokir port outbound 25. Gunakan port 587 atau 465."
+          },
+          {
+            num: 3,
+            title: "Periksa Ejaan Host",
+            desc: `Pastikan nama host server benar (saat ini: '${host}'). Untuk Gmail gunakan 'smtp.gmail.com'.`
+          },
+          {
+            num: 4,
+            title: "Uji Ulang Socket Koneksi",
+            desc: "Klik 'Uji Ulang' untuk memicu verifikasi socket TCP ke server relay.",
+            actionType: "test" as const
+          }
+        ]
+      };
+    }
+
+    // 5. ENOTFOUND / DNS Error
+    if (lowerErr.includes("enotfound") || lowerErr.includes("getaddrinfo")) {
+      return {
+        severity: "error" as const,
+        badge: "DNS TIDAK DITEMUKAN",
+        badgeColor: "bg-rose-500/20 text-rose-300 border-rose-500/30",
+        title: "Nama Host Server SMTP Tidak Valid (DNS Error)",
+        category: "Resolusi DNS Domain",
+        rawError: latestErrMsg,
+        rootCause: `Alamat host '${host}' tidak dapat ditemukan pada DNS publik. Periksa apakah terdapat typo huruf.`,
+        steps: [
+          {
+            num: 1,
+            title: "Periksa Ejaan Server Host",
+            desc: "Pastikan format hostname benar (contoh: smtp.gmail.com, smtp.mail.yahoo.com, smtp-relay.brevo.com).",
+            actionType: "accounts" as const
+          },
+          {
+            num: 2,
+            title: "Hapus Spasi Tambahan",
+            desc: "Pastikan tidak ada karakter spasi atau tanda kutip di awal atau akhir nama host."
+          },
+          {
+            num: 3,
+            title: "Gunakan Preset Otomatis",
+            desc: "Pilih preset penyedia di tab Akun untuk mengisi host & port standar secara otomatis.",
+            actionType: "accounts" as const
+          }
+        ]
+      };
+    }
+
+    // 6. Certificate / TLS Handshake
+    if (lowerErr.includes("certificate") || lowerErr.includes("self signed") || lowerErr.includes("tls") || lowerErr.includes("unable to verify")) {
+      return {
+        severity: "error" as const,
+        badge: "GALAT ENKRIPSI TLS",
+        badgeColor: "bg-amber-500/20 text-amber-300 border-amber-500/30",
+        title: "Galat Sertifikat Keamanan SSL/TLS",
+        category: "Enkripsi & Sertifikat",
+        rawError: latestErrMsg,
+        rootCause: "Sertifikat keamanan server SMTP ditolak atau negosiasi TLS tidak didukung pada port tersebut.",
+        steps: [
+          {
+            num: 1,
+            title: "Tukar Port & Mode Enkripsi",
+            desc: port === "465" ? "Coba ganti ke Port 587 dengan mode STARTTLS (SSL nonaktif)." : "Coba ganti ke Port 465 dengan opsi SSL aktif.",
+            actionType: "accounts" as const
+          },
+          {
+            num: 2,
+            title: "Gunakan Host Resmi Penyedia",
+            desc: "Gunakan hostname domain resmi bertingkat TLS valid, bukan alamat IP langsung.",
+            actionType: "accounts" as const
+          }
+        ]
+      };
+    }
+
+    // 7. Relay access denied / 550 / 554
+    if (lowerErr.includes("550") || lowerErr.includes("554") || lowerErr.includes("relay access denied") || lowerErr.includes("sender address rejected")) {
+      return {
+        severity: "error" as const,
+        badge: "RELAY DITOLAK (550)",
+        badgeColor: "bg-rose-500/20 text-rose-300 border-rose-500/30",
+        title: "Akses Relay Ditolak oleh Server SMTP",
+        category: "Izin Pengirim (Sender Policy)",
+        rawError: latestErrMsg,
+        rootCause: "Server SMTP menolak email karena alamat 'Dari (From)' tidak diizinkan atau tidak cocok dengan akun login SMTP.",
+        steps: [
+          {
+            num: 1,
+            title: "Samakan Alamat Pengirim",
+            desc: `Pastikan field 'Dari' di form kirim sesuai dengan username SMTP Anda ('${smtpConfig?.username}').`
+          },
+          {
+            num: 2,
+            title: "Periksa Pengaturan Alias Email",
+            desc: "Jika ingin mengirim menggunakan alias email, daftarkan alias tersebut terlebih dahulu di akun penyedia email Anda."
+          }
+        ]
+      };
+    }
+
+    // 8. Rate limit
+    if (lowerErr.includes("421") || lowerErr.includes("450") || lowerErr.includes("rate limit") || lowerErr.includes("daily limit") || lowerErr.includes("quota exceeded")) {
+      return {
+        severity: "warning" as const,
+        badge: "BATAS KUOTA (RATE LIMIT)",
+        badgeColor: "bg-amber-500/20 text-amber-300 border-amber-500/30",
+        title: "Batas Kuota Pengiriman Provider Tercapai",
+        category: "Kuota Provider",
+        rawError: latestErrMsg,
+        rootCause: "Penyedia email membatasi kuota pengiriman per jam atau per hari untuk mencegah pengiriman berlebihan.",
+        steps: [
+          {
+            num: 1,
+            title: "Beri Jeda Waktu Pengiriman",
+            desc: "Tunggu sekitar 15-60 menit sebelum mencoba mengirim email berikutnya."
+          },
+          {
+            num: 2,
+            title: "Gunakan Layanan Relay Transaksional",
+            desc: "Untuk kapasitas kirim lebih tinggi, gunakan provider transaksional seperti Brevo, Resend, atau SendGrid.",
+            actionType: "accounts" as const
+          }
+        ]
+      };
+    }
+
+    // 9. Connected & Healthy
+    if (smtpStatus.status === "connected") {
+      return {
+        severity: "healthy" as const,
+        badge: "RELAY NORMAL",
+        badgeColor: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30",
+        title: "Relay SMTP Terverifikasi & Siap Digunakan",
+        category: "Koneksi Normal",
+        rawError: undefined,
+        rootCause: `Server relay terhubung secara aktif ke ${smtpConfig?.host || "server"} pada port ${smtpConfig?.port || "587"}.`,
+        steps: [
+          {
+            num: 1,
+            title: "Kredensial Valid & Aktif",
+            desc: `Akun ${smtpConfig?.username} terautentikasi dan siap merelay draf email.`
+          },
+          {
+            num: 2,
+            title: "Pemeriksaan Berkala",
+            desc: "Klik 'Pindai Ulang' kapan saja untuk memverifikasi respons latensi socket server.",
+            actionType: "test" as const
+          }
+        ]
+      };
+    }
+
+    // 10. Disconnected fallback
+    if (smtpStatus.status === "disconnected") {
+      return {
+        severity: "warning" as const,
+        badge: "TERPUTUS",
+        badgeColor: "bg-amber-500/20 text-amber-300 border-amber-500/30",
+        title: "Koneksi SMTP Belum Terverifikasi",
+        category: "Status Relay",
+        rawError: latestErrMsg || smtpStatus.message,
+        rootCause: smtpStatus.message || "Server relay belum merespons. Jalankan pemindaian untuk menganalisis jalur koneksi.",
+        steps: [
+          {
+            num: 1,
+            title: "Jalankan Tes Verifikasi",
+            desc: "Klik tombol 'Pindai Ulang' di bawah untuk mengecek status port dan respons server.",
+            actionType: "test" as const
+          },
+          {
+            num: 2,
+            title: "Periksa Konfigurasi Akun",
+            desc: "Pastikan host, port, username, dan sandi aplikasi sudah terisi dengan benar.",
+            actionType: "accounts" as const
+          }
+        ]
+      };
+    }
+
+    // Default neutral
+    return {
+      severity: "healthy" as const,
+      badge: "SISTEM SIAP",
+      badgeColor: "bg-cyan-500/20 text-cyan-300 border-cyan-500/30",
+      title: "Diagnostik Siap Memantau Relay",
+      category: "Pemantauan Otomatis",
+      rawError: undefined,
+      rootCause: "Sistem mendeteksi konfigurasi akun tersimpan. Menunggu aktivitas pengujian.",
+      steps: [
+        {
+          num: 1,
+          title: "Uji Koneksi Relay Sekarang",
+          desc: "Tekan tombol 'Pindai Ulang' di bawah untuk memastikan jalur relay aktif tanpa hambatan.",
+          actionType: "test" as const
+        }
+      ]
+    };
+  }, [logs, smtpStatus, smtpConfig]);
+
+  const handleRunDiagnosticScan = async () => {
+    setIsDiagnosticScanning(true);
+    try {
+      await verifySmtpConnection(smtpConfig, false);
+    } finally {
+      setIsDiagnosticScanning(false);
+    }
+  };
+
+  const handleCopyDiagnostic = () => {
+    const summary = `=== DIAGNOSTIK RELAY SMTP ===\nStatus: ${smtpDiagnostic.title} (${smtpDiagnostic.category})\nSeveritas: ${smtpDiagnostic.severity.toUpperCase()}\nAkar Masalah: ${smtpDiagnostic.rootCause}\n${smtpDiagnostic.rawError ? `Detail Galat: ${smtpDiagnostic.rawError}\n` : ""}Host: ${smtpConfig?.host || "-"}:${smtpConfig?.port || "-"}\nUser: ${smtpConfig?.username || "-"}\n\nPanduan Solusi:\n${smtpDiagnostic.steps.map(s => `${s.num}. ${s.title}: ${s.desc}`).join("\n")}`;
+    navigator.clipboard.writeText(summary);
+    setCopiedDiagnostic(true);
+    setTimeout(() => setCopiedDiagnostic(false), 2500);
+  };
 
   // Live DNS MX Lookup for Custom Domain SMTP setup
   useEffect(() => {
@@ -3113,6 +3457,148 @@ export default function App() {
                     </button>
                   );
                 })}
+
+                {/* Collapsed Icon for Smart Bank Template */}
+                {sidebarCollapsed && (
+                  <div className="pt-2 border-t border-slate-800/80 my-2 flex justify-center">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSidebarCollapsed(false);
+                        setSmartBankExpanded(true);
+                      }}
+                      className="w-full flex items-center justify-center p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800/70 transition-all cursor-pointer relative group"
+                      title="Smart Bank Template (6 Bank Didukung)"
+                    >
+                      <div className="relative">
+                        <Landmark className="w-4.5 h-4.5 text-cyan-400" />
+                        <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+                      </div>
+                      <span className="absolute left-full ml-3.5 px-2.5 py-1 bg-slate-900 text-white text-[11px] font-semibold rounded-md whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity shadow-xl border border-slate-700 z-50">
+                        Smart Bank Template (6 Bank)
+                      </span>
+                    </button>
+                  </div>
+                )}
+
+                {/* Expanded Smart Bank Template Panel */}
+                {!sidebarCollapsed && (
+                  <div className="pt-3 border-t border-slate-800/80 mt-3 space-y-2">
+                    <div className="flex items-center justify-between px-1">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <Landmark className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                        <span className="text-[10px] font-black text-slate-300 uppercase tracking-wider truncate">
+                          Smart Bank Template
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <span className="text-[8px] font-black bg-cyan-950 text-cyan-300 border border-cyan-800/70 px-1.5 py-0.5 rounded font-mono">
+                          6 Bank
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setSmartBankExpanded(!smartBankExpanded)}
+                          className="p-1 text-slate-400 hover:text-white rounded transition-colors cursor-pointer"
+                          title={smartBankExpanded ? "Sembunyikan Daftar Bank" : "Tampilkan Daftar Bank"}
+                        >
+                          <ChevronDown className={cn("w-3 h-3 transition-transform duration-200", !smartBankExpanded && "-rotate-90")} />
+                        </button>
+                      </div>
+                    </div>
+
+                    <AnimatePresence initial={false}>
+                      {smartBankExpanded && (
+                        <motion.div
+                          key="smart-bank-panel-content"
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: "auto" }}
+                          exit={{ opacity: 0, height: 0 }}
+                          transition={{ duration: 0.24, ease: [0.25, 1, 0.5, 1] }}
+                          className="overflow-hidden"
+                        >
+                          <div className="space-y-1.5 pt-0.5">
+                            {Object.values(OFFICIAL_BANK_CONFIGS).map((bank) => {
+                              const isCurrentBank = detectBankKey(`${mailForm.subject} ${mailForm.message}`) === bank.key;
+                              return (
+                                <div
+                                  key={bank.key}
+                                  onClick={() => setSelectedBankDetail(bank)}
+                                  className={cn(
+                                    "p-2 rounded-xl border transition-all cursor-pointer group flex flex-col gap-1.5",
+                                    isCurrentBank
+                                      ? "bg-slate-900/90 border-cyan-500/50 shadow-xs"
+                                      : "bg-slate-900/40 border-slate-800/80 hover:bg-slate-800/60 hover:border-slate-700"
+                                  )}
+                                  title={`Klik untuk detail & pratinjau identitas ${bank.fullName}`}
+                                >
+                                  <div className="flex items-center justify-between gap-1.5">
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      {/* Bank Official Logo */}
+                                      <div className="w-12 h-5.5 bg-white/95 rounded px-1 flex items-center justify-center shrink-0 shadow-2xs">
+                                        <img
+                                          src={bank.logoUrl}
+                                          alt={bank.name}
+                                          className="max-h-4.5 max-w-full object-contain"
+                                          loading="lazy"
+                                        />
+                                      </div>
+                                      <div className="flex flex-col min-w-0">
+                                        <span className="text-[11px] font-bold text-slate-200 group-hover:text-cyan-300 transition-colors truncate">
+                                          {bank.name}
+                                        </span>
+                                        <span className="text-[9px] text-slate-400 truncate">
+                                          {bank.fullName}
+                                        </span>
+                                      </div>
+                                    </div>
+
+                                    {isCurrentBank ? (
+                                      <span className="text-[8px] font-black uppercase tracking-wider text-emerald-400 bg-emerald-950/80 border border-emerald-800/80 px-1.5 py-0.5 rounded shrink-0">
+                                        Aktif
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleApplyBankTemplate(bank.key);
+                                        }}
+                                        className="text-[9px] font-bold text-slate-400 hover:text-cyan-300 hover:underline px-1 py-0.5 shrink-0 cursor-pointer"
+                                        title={`Terapkan identitas Bank ${bank.name} ke draf`}
+                                      >
+                                        Terapkan
+                                      </button>
+                                    )}
+                                  </div>
+
+                                  {/* Color Accent Previews */}
+                                  <div className="flex items-center justify-between pt-1 border-t border-slate-800/60 text-[9px] font-mono">
+                                    <div className="flex items-center gap-1.5">
+                                      <span
+                                        className="w-2.5 h-2.5 rounded-xs shrink-0 shadow-xs border border-white/20"
+                                        style={{ backgroundColor: bank.primaryColor }}
+                                        title={`Aksen Utama: ${bank.primaryColor}`}
+                                      />
+                                      <span className="text-slate-400">{bank.primaryColor}</span>
+                                    </div>
+                                    <div className="flex items-center gap-1 text-[8.5px] text-slate-400">
+                                      <span
+                                        className="w-2 h-2 rounded-full shrink-0"
+                                        style={{ backgroundColor: bank.buttonColor }}
+                                        title={`Warna Tombol: ${bank.buttonColor}`}
+                                      />
+                                      <span className="truncate">Tombol</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                )}
               </div>
 
               {/* Sidebar Bottom: SMTP Status & Collapse Action */}
@@ -3972,10 +4458,15 @@ export default function App() {
                                         const detectedBank = detectBankKey(`${mailForm.subject} ${mailForm.message}`);
                                         const cfg = OFFICIAL_BANK_CONFIGS[detectedBank] || OFFICIAL_BANK_CONFIGS.bca;
                                         return (
-                                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-white text-mandiri-blue-800 border border-slate-200 shadow-2xs">
+                                          <button
+                                            type="button"
+                                            onClick={() => setSelectedBankDetail(cfg)}
+                                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-white text-mandiri-blue-800 border border-slate-200 shadow-2xs hover:bg-slate-50 cursor-pointer transition-all active:scale-95"
+                                            title="Klik untuk membuka Smart Bank Template"
+                                          >
                                             <span className="w-1.5 h-1.5 rounded-full bg-mandiri-blue-600 animate-pulse" />
                                             <span>Logo: {cfg.name}</span>
-                                          </span>
+                                          </button>
                                         );
                                       })()}
                                     </div>
@@ -4325,10 +4816,200 @@ export default function App() {
                     animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
                     exit={{ opacity: 0, y: -8, filter: "blur(2px)" }}
                     transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-                    className="p-4 max-w-lg mx-auto h-full flex flex-col gap-4 w-[95%] sm:w-full mobile-card-container"
+                    className="p-3 sm:p-4 max-w-2xl mx-auto h-full flex flex-col gap-3.5 w-[96%] sm:w-full overflow-y-auto no-scrollbar pb-24 mobile-card-container"
                   >
-                    <div className="bg-[#020617] rounded-[24px] border border-slate-800 shadow-2xl flex flex-col h-[70vh] overflow-hidden">
-                      <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900">
+                    {/* PANEL DIAGNOSTIK & PANDUAN PERBAIKAN SMTP (Troubleshooting Guide) */}
+                    <div className="bg-[#0b1329] rounded-[24px] border border-slate-800 shadow-2xl overflow-hidden transition-all duration-200">
+                      {/* Diagnostic Header */}
+                      <div className="p-3.5 sm:p-4 border-b border-slate-800/80 bg-slate-900/90 flex flex-wrap items-center justify-between gap-2.5">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className={cn(
+                            "w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border",
+                            smtpDiagnostic.severity === "healthy" && "bg-emerald-500/10 text-emerald-400 border-emerald-500/30",
+                            smtpDiagnostic.severity === "error" && "bg-rose-500/10 text-rose-400 border-rose-500/30",
+                            smtpDiagnostic.severity === "warning" && "bg-amber-500/10 text-amber-400 border-amber-500/30",
+                            smtpDiagnostic.severity === "unconfigured" && "bg-slate-800 text-slate-400 border-slate-700"
+                          )}>
+                            {smtpDiagnostic.severity === "healthy" ? (
+                              <ShieldCheck className="w-4 h-4" />
+                            ) : smtpDiagnostic.severity === "error" ? (
+                              <ShieldAlert className="w-4 h-4" />
+                            ) : smtpDiagnostic.severity === "warning" ? (
+                              <TriangleAlert className="w-4 h-4" />
+                            ) : (
+                              <Wrench className="w-4 h-4" />
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <h2 className="text-[11px] font-black text-slate-200 tracking-wider uppercase">
+                                DIAGNOSTIK RELAY SMTP
+                              </h2>
+                              <span className={cn(
+                                "px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-tight border",
+                                smtpDiagnostic.badgeColor
+                              )}>
+                                {smtpDiagnostic.badge}
+                              </span>
+                            </div>
+                            <p className="text-[10px] text-slate-400 truncate mt-0.5">
+                              {smtpDiagnostic.category} • Pemindai otomatis & panduan solusi
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Quick Controls */}
+                        <div className="flex items-center gap-1.5 ml-auto">
+                          <button
+                            onClick={handleRunDiagnosticScan}
+                            disabled={isDiagnosticScanning}
+                            className="px-2.5 py-1.5 bg-mandiri-blue-600 hover:bg-mandiri-blue-500 disabled:opacity-50 text-white rounded-lg text-[10px] font-bold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
+                            title="Pindai ulang koneksi SMTP sekarang"
+                          >
+                            <RefreshCw className={cn("w-3 h-3", isDiagnosticScanning && "animate-spin")} />
+                            <span>{isDiagnosticScanning ? "Memindai..." : "Pindai Ulang"}</span>
+                          </button>
+
+                          <button
+                            onClick={handleCopyDiagnostic}
+                            className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition-all cursor-pointer"
+                            title="Salin hasil diagnosa"
+                          >
+                            {copiedDiagnostic ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                          </button>
+
+                          <button
+                            onClick={() => setDiagnosticExpanded(!diagnosticExpanded)}
+                            className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition-all cursor-pointer"
+                            title={diagnosticExpanded ? "Sembunyikan panduan" : "Tampilkan panduan"}
+                          >
+                            {diagnosticExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Diagnostic Content Body */}
+                      <AnimatePresence>
+                        {diagnosticExpanded && (
+                          <motion.div
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: "auto", opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.2 }}
+                            className="p-3.5 sm:p-4 space-y-3 border-b border-slate-800/60"
+                          >
+                            {/* Diagnosis Summary Card */}
+                            <div className={cn(
+                              "p-3 rounded-xl border text-xs",
+                              smtpDiagnostic.severity === "healthy" && "bg-emerald-950/20 border-emerald-800/40 text-emerald-200",
+                              smtpDiagnostic.severity === "error" && "bg-rose-950/25 border-rose-800/40 text-rose-200",
+                              smtpDiagnostic.severity === "warning" && "bg-amber-950/25 border-amber-800/40 text-amber-200",
+                              smtpDiagnostic.severity === "unconfigured" && "bg-slate-900 border-slate-800 text-slate-300"
+                            )}>
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="space-y-1">
+                                  <div className="font-bold text-[12px] flex items-center gap-1.5">
+                                    <span>{smtpDiagnostic.title}</span>
+                                  </div>
+                                  <p className="text-[11px] leading-relaxed text-slate-300/90">
+                                    <strong className="text-slate-200">Akar Masalah:</strong> {smtpDiagnostic.rootCause}
+                                  </p>
+                                </div>
+                              </div>
+
+                              {/* Raw error snippet if available */}
+                              {smtpDiagnostic.rawError && (
+                                <div className="mt-2.5 pt-2 border-t border-slate-800/60 flex items-center justify-between gap-2 bg-black/40 rounded-lg px-2.5 py-1.5 font-mono text-[10px] text-rose-300 break-all">
+                                  <span className="truncate">{smtpDiagnostic.rawError}</span>
+                                  <button
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(smtpDiagnostic.rawError || "");
+                                      setCopiedDiagnostic(true);
+                                      setTimeout(() => setCopiedDiagnostic(false), 2000);
+                                    }}
+                                    className="shrink-0 p-1 hover:text-white transition-colors"
+                                    title="Salin pesan error"
+                                  >
+                                    <Copy className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Step-by-Step Troubleshooting Guide */}
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                                  <HelpCircle className="w-3 h-3 text-cyan-400" />
+                                  Panduan Perbaikan Langkah Demi Langkah
+                                </span>
+                                <span className="text-[9px] text-slate-500 font-semibold">
+                                  {smtpDiagnostic.steps.length} Langkah
+                                </span>
+                              </div>
+
+                              <div className="grid gap-2">
+                                {smtpDiagnostic.steps.map((step) => (
+                                  <div
+                                    key={step.num}
+                                    className="bg-slate-900/80 border border-slate-800/80 rounded-xl p-2.5 flex items-start gap-2.5 hover:border-slate-700/80 transition-all"
+                                  >
+                                    <div className="w-5 h-5 rounded-full bg-slate-800 text-cyan-300 flex items-center justify-center shrink-0 font-bold text-[10px] mt-0.5 border border-slate-700">
+                                      {step.num}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="text-[11px] font-bold text-slate-200">
+                                        {step.title}
+                                      </div>
+                                      <p className="text-[10.5px] text-slate-400 leading-normal mt-0.5">
+                                        {step.desc}
+                                      </p>
+                                    </div>
+                                    {step.actionType === "accounts" && (
+                                      <button
+                                        onClick={() => setTab("accounts")}
+                                        className="shrink-0 px-2 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-300 hover:text-cyan-200 border border-slate-700 rounded-lg text-[9.5px] font-bold transition-all cursor-pointer"
+                                      >
+                                        Buka Akun
+                                      </button>
+                                    )}
+                                    {step.actionType === "test" && (
+                                      <button
+                                        onClick={handleRunDiagnosticScan}
+                                        disabled={isDiagnosticScanning}
+                                        className="shrink-0 px-2 py-1 bg-mandiri-blue-600/80 hover:bg-mandiri-blue-500 text-white rounded-lg text-[9.5px] font-bold transition-all cursor-pointer"
+                                      >
+                                        Uji Ulang
+                                      </button>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Helpful Tip & Direct Links */}
+                            <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[10px] text-slate-400">
+                              <span className="flex items-center gap-1.5">
+                                <Info className="w-3 h-3 text-mandiri-blue-400" />
+                                Host aktif: <code className="text-slate-200 font-mono">{smtpConfig?.host || "Belum ada"}</code> ({smtpConfig?.port || "587"})
+                              </span>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => setTab("accounts")}
+                                  className="text-cyan-400 hover:text-cyan-300 font-bold underline underline-offset-2 cursor-pointer flex items-center gap-1"
+                                >
+                                  Kelola Akun SMTP &rarr;
+                                </button>
+                              </div>
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+
+                    {/* LIVE STREAM RELAY CONSOLE */}
+                    <div className="bg-[#020617] rounded-[24px] border border-slate-800 shadow-2xl flex flex-col h-[40vh] sm:h-[45vh] min-h-[250px] overflow-hidden">
+                      <div className="p-3.5 sm:p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900">
                         <div className="flex flex-col">
                           <h2 className="text-[10px] font-extrabold text-slate-300 uppercase tracking-widest flex items-center gap-2">
                             RELAY CONSOLE
@@ -4341,6 +5022,7 @@ export default function App() {
                         <button
                           onClick={() => setLogs([])}
                           className="p-2.5 bg-slate-800 hover:bg-red-500/10 rounded-xl text-slate-400 hover:text-red-400 transition-all cursor-pointer"
+                          title="Bersihkan log terminal"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -4374,7 +5056,7 @@ export default function App() {
                         <div ref={terminalEndRef} />
                       </div>
 
-                      <div className="p-4 bg-slate-950 border-t border-slate-800 flex justify-between items-center px-4">
+                      <div className="p-3.5 sm:p-4 bg-slate-950 border-t border-slate-800 flex justify-between items-center px-4">
                         <span className="text-[10px] text-slate-500 font-bold uppercase tracking-tight">Log Count: {logs.length}/50</span>
                         <div className="flex items-center gap-2">
                           <span className="w-2 h-2 bg-mandiri-blue-500 rounded-full shadow-[0_0_8px_rgba(0,80,179,0.6)]" />
@@ -4395,7 +5077,7 @@ export default function App() {
                     transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
                     className="flex flex-col flex-1 h-full w-full overflow-hidden p-0 m-0 relative"
                     style={{
-                      background: "linear-gradient(180deg, #FFFFFF 0%, #FAFCFE 35%, #D4EAFD 70%, #A2D5FC 100%)"
+                      background: "linear-gradient(180deg, #FAF9F5 0%, #F4F7FB 35%, #D7EBFD 70%, #9BCFFA 100%)"
                     }}
                   >
                     {/* Modal Dialog for Custom Cancel Link */}
@@ -4476,17 +5158,113 @@ export default function App() {
                       )}
                     </AnimatePresence>
 
-                    {/* Top Navigation Bar: Hamburger "=", "Pro Mendalam ⌵", New Chat, Avatar */}
+                    {/* Modal Dialog for Custom Data Rules (Aturan Data Utama & Format Draf) */}
+                    <AnimatePresence>
+                      {showRulesModal && (
+                        <motion.div
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={{ opacity: 0 }}
+                          className="fixed inset-0 z-[125] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4"
+                          onClick={() => setShowRulesModal(false)}
+                        >
+                          <motion.div
+                            initial={{ scale: 0.95, opacity: 0, y: 10 }}
+                            animate={{ scale: 1, opacity: 1, y: 0 }}
+                            exit={{ scale: 0.95, opacity: 0, y: 10 }}
+                            onClick={e => e.stopPropagation()}
+                            className="bg-white rounded-3xl p-5 sm:p-6 w-full max-w-lg border border-indigo-100 shadow-2xl space-y-4"
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2.5">
+                                <div className="w-10 h-10 rounded-2xl bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-600 shrink-0">
+                                  <Brain className="w-5 h-5 stroke-[2.2]" />
+                                </div>
+                                <div>
+                                  <h4 className="text-sm font-black text-slate-900 uppercase tracking-tight">
+                                    Aturan Data Utama (Format Draf)
+                                  </h4>
+                                  <p className="text-[11px] text-slate-500 font-medium">
+                                    Tentukan struktur data dan format tetap yang wajib diterapkan AI
+                                  </p>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setShowRulesModal(false)}
+                                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center cursor-pointer text-xs font-bold transition-colors"
+                              >
+                                ✕
+                              </button>
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <div className="flex items-center justify-between">
+                                <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider">
+                                  Instruksi / Format Data Wajib:
+                                </label>
+                                {customDataRules.trim() && (
+                                  <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-100">
+                                    Aturan Aktif
+                                  </span>
+                                )}
+                              </div>
+                              <textarea
+                                rows={7}
+                                value={customDataRules}
+                                onChange={e => {
+                                  setCustomDataRules(e.target.value);
+                                  localStorage.setItem("custom_data_rules", e.target.value);
+                                }}
+                                placeholder={`Tuliskan aturan data atau format tetap yang Anda inginkan di sini.\nContoh:\n- Status: BERHASIL\n- Format Mata Uang: IDR (Rp)\n- Format Tanggal: DD MMMM YYYY, HH:mm WIB\n- Nama Pengirim / Organisasi: PT Contoh Solusi\n- Catatan Footer Wajib: Email ini dibuat otomatis oleh sistem.`}
+                                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:bg-white transition-all font-mono leading-relaxed"
+                              />
+                              <p className="text-[10px] text-slate-500 leading-tight">
+                                * Setiap kali AI merancang draf email baru, aturan ini otomatis disertakan ke dalam instruksi pembuat draf.
+                              </p>
+                            </div>
+
+                            <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+                              {customDataRules.trim() ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCustomDataRules("");
+                                    localStorage.removeItem("custom_data_rules");
+                                    addLog("info", "Aturan data utama telah direset.");
+                                  }}
+                                  className="text-xs font-bold text-rose-600 hover:underline cursor-pointer"
+                                >
+                                  Reset / Hapus Aturan
+                                </button>
+                              ) : <div />}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  localStorage.setItem("custom_data_rules", customDataRules);
+                                  addLog("success", "Aturan data utama berhasil disimpan!");
+                                  setShowRulesModal(false);
+                                }}
+                                className="px-4 py-2 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white rounded-xl text-xs font-black uppercase tracking-tight shadow-md shadow-indigo-600/20 cursor-pointer active:scale-95 transition-all"
+                              >
+                                Simpan & Terapkan
+                              </button>
+                            </div>
+                          </motion.div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
+                    {/* Top Navigation Bar: Back Arrow "←", "Pro Mendalam ⌵", New Chat, Avatar */}
                     <header className="px-5 pt-4 pb-2 flex items-center justify-between z-30 shrink-0 w-full max-w-4xl mx-auto">
-                      {/* Left: 2 Horizontal Bars (Drawer/Menu) */}
+                      {/* Left: Back Arrow (←) */}
                       <button
                         type="button"
-                        onClick={() => toggleSidebar()}
-                        className="w-10 h-10 -ml-2 rounded-full hover:bg-black/5 active:scale-95 transition-all cursor-pointer flex flex-col items-center justify-center gap-[4.5px]"
-                        title="Menu Navigasi"
+                        onClick={() => setTab("send")}
+                        className="w-10 h-10 -ml-2 rounded-full hover:bg-black/5 active:scale-95 transition-all cursor-pointer flex items-center justify-center text-[#141413]"
+                        title="Kembali ke Pengiriman"
                       >
-                        <span className="w-4 h-[2px] bg-[#18181b] rounded-full" />
-                        <span className="w-4 h-[2px] bg-[#18181b] rounded-full" />
+                        <ArrowLeft className="w-5 h-5 stroke-[2.2]" />
                       </button>
 
                       {/* Center: Model Selector Dropdown ("Pro Mendalam ⌵") */}
@@ -4496,10 +5274,10 @@ export default function App() {
                           onClick={() => setShowModelDropdown(prev => !prev)}
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-full hover:bg-black/5 active:scale-98 transition-all cursor-pointer select-none"
                         >
-                          <span className="text-[16px] sm:text-[17px] font-semibold text-[#18181b] tracking-tight">
+                          <span className="text-[17px] sm:text-[18px] font-semibold text-[#141413] tracking-tight">
                             {selectedModel}
                           </span>
-                          <ChevronDown className="w-4 h-4 text-[#52525b] stroke-[2.2]" />
+                          <ChevronDown className="w-4 h-4 text-[#52525b] stroke-[2.5]" />
                         </button>
 
                         <AnimatePresence>
@@ -4536,55 +5314,104 @@ export default function App() {
                         </AnimatePresence>
                       </div>
 
-                      {/* Right: New Chat (Pencil in Dotted Circle) & Claude Avatar */}
-                      <div className="flex items-center gap-3">
+                      {/* Right: New Chat (Pencil in Dotted Circle) & Minimalist Human Brain Icon for Custom Data Rules */}
+                      <div className="flex items-center gap-2 sm:gap-3">
                         <button
                           type="button"
                           onClick={handleClearChat}
-                          className="w-9 h-9 rounded-full hover:bg-black/5 active:scale-95 transition-all cursor-pointer flex items-center justify-center text-[#18181b]"
+                          className="w-10 h-10 rounded-full hover:bg-black/5 active:scale-95 transition-all cursor-pointer flex items-center justify-center text-[#141413]"
                           title="Percakapan Baru"
                         >
-                          <svg viewBox="0 0 24 24" className="w-[22px] h-[22px]" fill="none" stroke="currentColor">
-                            <circle cx="12" cy="12" r="9.2" strokeWidth="1.6" strokeDasharray="2.5 2.5" strokeLinecap="round" />
-                            <path d="M14.8 6.8l2.4 2.4-7.6 7.6H7.2v-2.4l7.6-7.6z" strokeWidth="1.6" strokeLinejoin="round" />
+                          <svg viewBox="0 0 24 24" className="w-[23px] h-[23px]" fill="none" stroke="currentColor">
+                            <circle cx="12" cy="12" r="9.5" strokeWidth="1.5" strokeDasharray="2.5 2.5" strokeLinecap="round" />
+                            <path d="M14.8 6.8l2.4 2.4-7.6 7.6H7.2v-2.4l7.6-7.6z" strokeWidth="1.5" strokeLinejoin="round" />
                           </svg>
                         </button>
-                        <div
-                          className="w-9 h-9 rounded-full bg-[#F5EBE6] flex items-center justify-center shrink-0 shadow-2xs select-none overflow-hidden"
-                          title="Profil Claude"
+                        <button
+                          type="button"
+                          onClick={() => setShowRulesModal(true)}
+                          className={cn(
+                            "w-10 h-10 rounded-full border flex items-center justify-center shrink-0 shadow-2xs select-none transition-all cursor-pointer relative group active:scale-95",
+                            customDataRules.trim()
+                              ? "bg-indigo-50/90 border-indigo-300 text-indigo-700 hover:bg-indigo-100"
+                              : "bg-[#FAEDE6] border-[#F4DDD2]/80 text-[#CC5A36] hover:bg-[#f6dfd3]"
+                          )}
+                          title="Aturan Data Utama & Format Draf Email"
                         >
-                          <ClaudeLogo className="w-6 h-6 shrink-0" animated={true} />
-                        </div>
+                          <Brain className="w-5 h-5 transition-transform group-hover:scale-110" />
+                          {customDataRules.trim() && (
+                            <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-indigo-600 rounded-full ring-2 ring-white animate-pulse" />
+                          )}
+                        </button>
                       </div>
                     </header>
 
                     {/* Middle Content Area */}
                     {chatMessages.length === 0 && !chatLoading ? (
-                      /* 1:1 Authentic Greeting Hero Screen */
+                      /* 1:1 Authentic Greeting Hero Screen with Moving Logo */
                       <div className="flex-1 flex flex-col items-center justify-center text-center px-4 -mt-10 sm:-mt-14 select-none animate-fadeIn">
-                        {/* Claude Logo (Previous Animated Logo) */}
-                        <div className="mb-4 flex items-center justify-center">
-                          <ClaudeLogo className="w-16 h-16 sm:w-20 sm:h-20 shrink-0" animated={true} />
+                        {/* Claude Logo (Kombinasi Putaran Halus 360° + Melayang) */}
+                        <div className="mb-5 flex items-center justify-center cursor-pointer select-none">
+                          <ClaudeLogo
+                            className="w-28 h-28 sm:w-36 sm:h-36 drop-shadow-md shrink-0"
+                            animated={true}
+                            floating={true}
+                            speed="normal"
+                            color="#CC5A36"
+                          />
                         </div>
 
                         {/* Title: Claude Mythos */}
-                        <h1 className="font-serif text-[32px] sm:text-[36px] font-medium tracking-tight text-[#141413] leading-none">
+                        <h1 className="font-serif text-[40px] sm:text-[46px] font-normal tracking-tight text-[#141413] leading-none mb-3 select-none">
                           Claude Mythos
                         </h1>
 
-                        {/* Greeting: Halo, saya Claude */}
-                        <h2 className="text-[24px] sm:text-[26px] font-semibold text-[#18181b] tracking-tight mt-6 leading-tight">
-                          Halo, saya Claude
-                        </h2>
-
                         {/* Subtitle: Ada yang bisa saya bantu? */}
-                        <p className="text-[16px] sm:text-[17px] font-normal text-[#64748b] mt-1.5 leading-relaxed">
+                        <p className="text-[17px] sm:text-[18px] font-normal text-[#64748b] mt-1 leading-relaxed select-none">
                           Ada yang bisa saya bantu?
                         </p>
+
+                        {/* Quick Smart Bank Template Chips on Greeting Screen */}
+                        <div className="mt-5 w-full max-w-md mx-auto space-y-2">
+                          <div className="flex items-center justify-center gap-1.5 text-[10.5px] font-black text-slate-500 uppercase tracking-wider">
+                            <Landmark className="w-3.5 h-3.5 text-cyan-600" />
+                            <span>Smart Bank Template (6 Bank)</span>
+                          </div>
+                          <div className="flex flex-wrap items-center justify-center gap-2">
+                            {Object.values(OFFICIAL_BANK_CONFIGS).map((bank) => (
+                              <motion.button
+                                key={bank.key}
+                                type="button"
+                                whileHover={{ scale: 1.05 }}
+                                whileTap={{ scale: 0.95 }}
+                                onClick={() => handleSendChatMessage(undefined, `Rancang draf email resmi Bank ${bank.name} dengan tampilan responsif modern`)}
+                                className="flex items-center gap-2 px-3 py-2 bg-white/95 hover:bg-white rounded-xl border border-slate-200/90 shadow-2xs hover:shadow-xs transition-all cursor-pointer group active:scale-95"
+                                title={`Pilih Template ${bank.fullName || bank.name}`}
+                              >
+                                <div className="h-5 w-12 bg-white rounded px-0.5 flex items-center justify-center shrink-0">
+                                  <img
+                                    src={bank.logoUrl}
+                                    alt={bank.name}
+                                    className="max-h-4.5 max-w-full object-contain"
+                                    loading="lazy"
+                                  />
+                                </div>
+                                <span
+                                  className="w-2 h-2 rounded-full shrink-0 border border-white/60 shadow-2xs"
+                                  style={{ backgroundColor: bank.primaryColor }}
+                                  title={`Aksen: ${bank.primaryColor}`}
+                                />
+                              </motion.button>
+                            ))}
+                          </div>
+                        </div>
                       </div>
                     ) : (
                       /* Scrollable Active Message Stream */
-                      <div className="flex-1 overflow-y-auto px-3.5 sm:px-6 py-4 space-y-4 max-w-3xl mx-auto w-full no-scrollbar">
+                      <div
+                        ref={chatContainerRef}
+                        className="flex-1 overflow-y-auto px-3.5 sm:px-6 py-4 space-y-4 max-w-3xl mx-auto w-full no-scrollbar"
+                      >
                         {chatMessages.map((msg, index) => {
                           const parsed = parseMessageContent(msg.text);
                           return (
@@ -4625,15 +5452,17 @@ export default function App() {
                                     >
                                       {parsed.text}
                                       {isTypingAI && index === chatMessages.length - 1 && msg.role === "model" && (
-                                        <span className="inline-block w-1.5 h-4 ml-1.5 align-middle bg-[#c96442] animate-pulse rounded-xs" />
+                                        <span ref={typingCursorRef} className="inline-flex items-center ml-1.5 align-middle select-none">
+                                          <ClaudeLogo className="w-3.5 h-3.5 shrink-0" animated={true} speed="fast" floating={true} color="#CC5A36" />
+                                        </span>
                                       )}
                                     </div>
                                   )
                                 ) : (
                                   isTypingAI && index === chatMessages.length - 1 && msg.role === "model" && (
-                                    <div className="px-4 py-2.5 rounded-2xl text-[14px] bg-white/95 border border-slate-200/80 text-[#18181b] rounded-tl-xs backdrop-blur-sm shadow-xs flex items-center gap-2">
-                                      <span className="text-slate-500 text-xs font-medium">Claude sedang mengetik</span>
-                                      <span className="inline-block w-1.5 h-3.5 bg-[#c96442] animate-pulse rounded-xs" />
+                                    <div ref={typingCursorRef} className="px-4 py-2.5 rounded-2xl text-[14px] bg-white/95 border border-slate-200/80 text-[#18181b] rounded-tl-xs backdrop-blur-sm shadow-xs flex items-center gap-2">
+                                      <ClaudeLogo className="w-4 h-4 shrink-0" animated={true} speed="fast" floating={true} color="#CC5A36" />
+                                      <span className="text-slate-600 text-xs font-medium">Claude sedang merangkai respons...</span>
                                     </div>
                                   )
                                 )}
@@ -4642,7 +5471,7 @@ export default function App() {
                                 {isTypingAI && index === chatMessages.length - 1 && msg.role === "model" && (
                                   <div className="flex items-center justify-between px-1 text-[11px] select-none">
                                     <div className="flex items-center gap-1.5 text-slate-500 font-medium">
-                                      <span className="w-1.5 h-1.5 rounded-full bg-[#c96442] animate-ping" />
+                                      <ClaudeLogo className="w-3 h-3 shrink-0" animated={true} speed="fast" floating={true} color="#CC5A36" />
                                       <span className="text-[11px] text-slate-500">Claude Mythos sedang menulis...</span>
                                     </div>
                                     <button
@@ -4662,10 +5491,83 @@ export default function App() {
                                     initial={{ opacity: 0, y: 8, scale: 0.98 }}
                                     animate={{ opacity: 1, y: 0, scale: 1 }}
                                     transition={{ duration: 0.3 }}
-                                    className="w-full flex flex-col gap-2.5 my-1"
+                                    className="w-full flex flex-col gap-3 my-2 p-3 sm:p-4 bg-slate-50/80 rounded-2xl border-2 border-slate-200/90 shadow-sm"
                                   >
+                                    {/* Draft Header Banner with clear visual badge, view toggle, and prominent Copy HTML button */}
+                                    <div className="flex flex-wrap items-center justify-between gap-2.5 pb-2 border-b border-slate-200/70">
+                                      <div className="flex items-center gap-2">
+                                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold uppercase tracking-wider bg-mandiri-blue-50 text-mandiri-blue-700 border border-mandiri-blue-200/80 shadow-2xs">
+                                          <Sparkles className="w-3.5 h-3.5 text-mandiri-blue-600" />
+                                          <span>Draf Email HTML</span>
+                                        </span>
+                                        <span className="text-[11px] text-slate-500 hidden sm:inline font-medium">
+                                          Dihasilkan oleh AI
+                                        </span>
+                                      </div>
+
+                                      <div className="flex items-center gap-1.5 ml-auto">
+                                        {/* View Mode Toggle: Preview vs Raw HTML */}
+                                        <div className="inline-flex p-0.5 bg-slate-200/70 rounded-lg text-xs">
+                                          <button
+                                            type="button"
+                                            onClick={() => setChatViewMode(prev => ({ ...prev, [index]: "preview" }))}
+                                            className={cn(
+                                              "px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all flex items-center gap-1 cursor-pointer",
+                                              (chatViewMode[index] || "preview") === "preview"
+                                                ? "bg-white text-slate-800 shadow-xs"
+                                                : "text-slate-600 hover:text-slate-900"
+                                            )}
+                                            title="Pratinjau tampilan visual draf email"
+                                          >
+                                            <Eye className="w-3.5 h-3.5" />
+                                            <span>Pratinjau</span>
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setChatViewMode(prev => ({ ...prev, [index]: "code" }))}
+                                            className={cn(
+                                              "px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all flex items-center gap-1 cursor-pointer",
+                                              chatViewMode[index] === "code"
+                                                ? "bg-white text-slate-800 shadow-xs"
+                                                : "text-slate-600 hover:text-slate-900"
+                                            )}
+                                            title="Lihat kode HTML draf email"
+                                          >
+                                            <Code className="w-3.5 h-3.5" />
+                                            <span>Kode HTML</span>
+                                          </button>
+                                        </div>
+
+                                        {/* Dedicated prominent Copy to Clipboard button */}
+                                        <button
+                                          type="button"
+                                          onClick={() => handleCopyHtmlDraft(parsed.html, index)}
+                                          className={cn(
+                                            "px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-95",
+                                            copiedHtmlIndex === index
+                                              ? "bg-emerald-600 text-white shadow-emerald-600/30"
+                                              : "bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 hover:border-slate-300"
+                                          )}
+                                          title="Salin kode HTML lengkap ke clipboard"
+                                        >
+                                          {copiedHtmlIndex === index ? (
+                                            <>
+                                              <Check className="w-3.5 h-3.5 text-white" />
+                                              <span>Tersalin!</span>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <Copy className="w-3.5 h-3.5 text-slate-600" />
+                                              <span>Salin Kode HTML</span>
+                                            </>
+                                          )}
+                                        </button>
+                                      </div>
+                                    </div>
+
+                                    {/* Subject Bar */}
                                     {parsed.subject && (
-                                      <div className="px-4 py-2.5 rounded-xl bg-white border border-slate-200 flex items-center justify-between gap-3 shadow-xs">
+                                      <div className="px-3.5 py-2 rounded-xl bg-white border border-slate-200 flex items-center justify-between gap-3 shadow-2xs">
                                         <div className="flex items-center gap-2 min-w-0 flex-1">
                                           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider shrink-0">
                                             Subjek:
@@ -4688,15 +5590,36 @@ export default function App() {
                                       </div>
                                     )}
 
-                                    <div className="w-full h-[400px] xs:h-[460px] sm:h-[520px] shrink-0 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden ring-1 ring-slate-100">
-                                      <iframe
-                                        title={`Receipt Preview ${index}`}
-                                        srcDoc={formatHTMLForPreview(parsed.html)}
-                                        className="w-full h-full border-0 bg-white"
-                                        sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-                                      />
-                                    </div>
+                                    {/* Content Display: Preview Iframe or Raw Code View */}
+                                    {(chatViewMode[index] || "preview") === "preview" ? (
+                                      <div className="w-full h-[400px] xs:h-[460px] sm:h-[520px] shrink-0 bg-white rounded-xl border border-slate-200/90 shadow-xs overflow-hidden ring-1 ring-slate-100">
+                                        <iframe
+                                          title={`Receipt Preview ${index}`}
+                                          srcDoc={formatHTMLForPreview(parsed.html)}
+                                          className="w-full h-full border-0 bg-white"
+                                          sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+                                        />
+                                      </div>
+                                    ) : (
+                                      <div className="relative w-full h-[400px] xs:h-[460px] sm:h-[520px] shrink-0 bg-[#0f172a] rounded-xl border border-slate-800 shadow-inner overflow-hidden flex flex-col font-mono text-xs">
+                                        <div className="flex items-center justify-between px-3 py-2 bg-slate-900 border-b border-slate-800 text-slate-400 text-[11px]">
+                                          <span>HTML Source Code ({forceInlineStylesToHtml(parsed.html).length.toLocaleString()} karakter)</span>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleCopyHtmlDraft(parsed.html, index)}
+                                            className="text-xs text-sky-400 hover:text-sky-300 flex items-center gap-1 font-semibold cursor-pointer"
+                                          >
+                                            {copiedHtmlIndex === index ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                                            <span>{copiedHtmlIndex === index ? "Tersalin!" : "Salin Kode"}</span>
+                                          </button>
+                                        </div>
+                                        <pre className="flex-1 p-3.5 overflow-auto text-emerald-300 leading-relaxed whitespace-pre font-mono text-[11.5px] select-all">
+                                          <code>{forceInlineStylesToHtml(parsed.html)}</code>
+                                        </pre>
+                                      </div>
+                                    )}
 
+                                    {/* Primary Action Buttons Bar */}
                                     <div className="flex flex-col sm:flex-row gap-2 pt-1">
                                       <button
                                         type="button"
@@ -4720,15 +5643,26 @@ export default function App() {
 
                                         <button
                                           type="button"
-                                          onClick={() => {
-                                            navigator.clipboard.writeText(forceInlineStylesToHtml(parsed.html));
-                                            addLog("info", "Salin kode HTML berhasil dilakukan.");
-                                          }}
-                                          title="Salin kode HTML"
-                                          className="py-2.5 px-3 min-h-[42px] bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-xs active:scale-95"
+                                          onClick={() => handleCopyHtmlDraft(parsed.html, index)}
+                                          title="Salin kode HTML lengkap ke clipboard"
+                                          className={cn(
+                                            "py-2.5 px-3 min-h-[42px] border rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-xs active:scale-95",
+                                            copiedHtmlIndex === index
+                                              ? "bg-emerald-50 border-emerald-300 text-emerald-700"
+                                              : "bg-white hover:bg-slate-50 border-slate-200 text-slate-700"
+                                          )}
                                         >
-                                          <Copy className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                                          <span className="truncate">Salin HTML</span>
+                                          {copiedHtmlIndex === index ? (
+                                            <>
+                                              <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                              <span className="truncate font-bold">Tersalin</span>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <Copy className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                                              <span className="truncate">Salin HTML</span>
+                                            </>
+                                          )}
                                         </button>
 
                                         <button
@@ -4764,7 +5698,7 @@ export default function App() {
                             </div>
                           </motion.div>
                         )}
-                        <div ref={chatEndRef} />
+                        <div ref={chatEndRef} className="h-20 sm:h-28 shrink-0" />
                       </div>
                     )}
 
@@ -4781,57 +5715,84 @@ export default function App() {
                               transition={{ duration: 0.2 }}
                               className="absolute bottom-full mb-3 left-0 right-0 bg-white/95 backdrop-blur-xl rounded-3xl p-4 border border-white/80 shadow-[0_12px_40px_rgba(20,50,100,0.16)] space-y-3 z-50"
                             >
-                              <div className="flex items-center justify-between pb-1 border-b border-slate-100">
-                                <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">
-                                  Generator Cepat Bank (1-Klik)
-                                </span>
+                              <div className="flex items-center justify-between pb-1.5 border-b border-slate-100">
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <Landmark className="w-4 h-4 text-cyan-600 shrink-0" />
+                                  <span className="text-[12px] font-black text-slate-800 uppercase tracking-wider truncate">
+                                    Smart Bank Template (1-Klik)
+                                  </span>
+                                  <span className="text-[8.5px] font-black bg-cyan-950 text-cyan-300 px-1.5 py-0.5 rounded font-mono shrink-0">
+                                    6 Bank
+                                  </span>
+                                </div>
                                 <button
                                   type="button"
                                   onClick={() => setShowCancelLinkSettings(true)}
-                                  className="text-[11px] font-semibold text-mandiri-blue-600 hover:underline flex items-center gap-1 cursor-pointer"
+                                  className="text-[11px] font-semibold text-mandiri-blue-600 hover:underline flex items-center gap-1 cursor-pointer shrink-0"
                                 >
                                   <LinkIcon className="w-3.5 h-3.5" />
-                                  <span>Link Batal</span>
+                                  <span>Link Tombol</span>
                                 </button>
                               </div>
-                              <div className="grid grid-cols-3 gap-2">
+                              <p className="text-[10px] text-slate-500 font-medium -mt-1">
+                                Pilih bank untuk menyesuaikan logo resmi & warna aksen secara otomatis:
+                              </p>
+                              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                                 {[
-                                  { bank: "BCA", scen: "payment" as const, label: "BCA 5 Juta", prompt: "Buatkan bukti transaksi pembayaran kartu kredit BCA Rp 5.000.000" },
-                                  { bank: "Mandiri", scen: "transfer" as const, label: "Mandiri 1.25 Juta", prompt: "Buatkan bukti transfer bank Mandiri Rp 1.250.000" },
-                                  { bank: "BRI", scen: "transfer" as const, label: "BRI 750 Ribu", prompt: "Buatkan bukti transfer BRI nominal Rp 750.000" },
-                                  { bank: "BNI", scen: "refund" as const, label: "BNI 2.1 Juta", prompt: "Buatkan bukti pengembalian dana (refund) BNI Rp 2.100.000" },
-                                  { bank: "CIMB", scen: "topup" as const, label: "CIMB 300 Ribu", prompt: "Buatkan bukti isi saldo top up CIMB Niaga Rp 300.000" },
-                                  { bank: "UOB", scen: "cash_advance" as const, label: "UOB 1 Juta", prompt: "Buatkan bukti tarik tunai kartu kredit UOB Rp 1.000.000" }
+                                  { key: "bca", label: "Bank BCA", sub: "Bank Central Asia", prompt: "Buatkan draf email notifikasi transaksi Kartu kredit Berhasil Bank BCA untuk pembelian di merchant Shopee sebesar Rp 5.000.000 beserta tombol BATALKAN TRANSAKSI dengan tata letak tampilan modern dan rapi.", logo: OFFICIAL_BANK_CONFIGS.bca.logoUrl, color: OFFICIAL_BANK_CONFIGS.bca.primaryColor },
+                                  { key: "mandiri", label: "Bank Mandiri", sub: "Livin' by Mandiri", prompt: "Buatkan draf email notifikasi transaksi Kartu kredit Berhasil Bank Mandiri untuk pembelian di merchant Shopee sebesar Rp 5.000.000 beserta tombol BATALKAN TRANSAKSI dengan tata letak tampilan modern dan rapi.", logo: OFFICIAL_BANK_CONFIGS.mandiri.logoUrl, color: OFFICIAL_BANK_CONFIGS.mandiri.primaryColor },
+                                  { key: "bri", label: "Bank BRI", sub: "BRImo Official", prompt: "Buatkan draf email notifikasi transaksi Kartu kredit Berhasil Bank BRI untuk pembelian di merchant Shopee sebesar Rp 5.000.000 beserta tombol BATALKAN TRANSAKSI dengan tata letak tampilan modern dan rapi.", logo: OFFICIAL_BANK_CONFIGS.bri.logoUrl, color: OFFICIAL_BANK_CONFIGS.bri.primaryColor },
+                                  { key: "bni", label: "Bank BNI", sub: "Wondr by BNI", prompt: "Buatkan draf email notifikasi transaksi Kartu kredit Berhasil Bank BNI untuk pembelian di merchant Shopee sebesar Rp 5.000.000 beserta tombol BATALKAN TRANSAKSI dengan tata letak tampilan modern dan rapi.", logo: OFFICIAL_BANK_CONFIGS.bni.logoUrl, color: OFFICIAL_BANK_CONFIGS.bni.primaryColor },
+                                  { key: "cimb", label: "Bank CIMB", sub: "CIMB Niaga", prompt: "Buatkan draf email notifikasi transaksi Kartu kredit Berhasil Bank CIMB Niaga untuk pembelian di merchant Shopee sebesar Rp 5.000.000 beserta tombol BATALKAN TRANSAKSI dengan tata letak tampilan modern dan rapi.", logo: OFFICIAL_BANK_CONFIGS.cimb.logoUrl, color: OFFICIAL_BANK_CONFIGS.cimb.primaryColor },
+                                  { key: "uob", label: "Bank UOB", sub: "TMRW by UOB", prompt: "Buatkan draf email notifikasi transaksi Kartu kredit Berhasil Bank UOB untuk pembelian di merchant Shopee sebesar Rp 5.000.000 beserta tombol BATALKAN TRANSAKSI dengan tata letak tampilan modern dan rapi.", logo: OFFICIAL_BANK_CONFIGS.uob.logoUrl, color: OFFICIAL_BANK_CONFIGS.uob.primaryColor }
                                 ].map((item, idx) => (
-                                  <button
+                                  <motion.button
                                     key={idx}
                                     type="button"
+                                    whileHover={{ scale: 1.03 }}
+                                    whileTap={{ scale: 0.96 }}
                                     onClick={() => {
                                       setShowPlusMenu(false);
                                       handleSendChatMessage(undefined, item.prompt);
                                     }}
-                                    className="p-2.5 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition-all shadow-xs active:scale-95 text-center flex flex-col items-center justify-center gap-0.5 cursor-pointer"
+                                    className="p-3 rounded-2xl border border-slate-200/90 bg-white hover:bg-slate-50 transition-all shadow-xs flex items-center justify-between gap-2 cursor-pointer group overflow-hidden"
+                                    title={`Gunakan Template ${item.label}`}
                                   >
-                                    <span className="text-mandiri-blue-700 font-extrabold">{item.bank}</span>
-                                    <span className="text-[10px] text-slate-500 font-normal truncate max-w-full">{item.label.replace(/^[A-Z]+\s*/, "")}</span>
-                                  </button>
+                                    {/* Official Bank Logo */}
+                                    <div className="h-7 w-24 bg-white rounded-lg px-1 flex items-center justify-center shrink-0">
+                                      <img
+                                        src={item.logo}
+                                        alt={item.label}
+                                        className="max-h-5.5 max-w-full object-contain"
+                                        loading="lazy"
+                                      />
+                                    </div>
+                                    {/* Accent color dot with hex */}
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      <span
+                                        className="w-2.5 h-2.5 rounded-full border border-white shadow-xs shrink-0"
+                                        style={{ backgroundColor: item.color }}
+                                        title={`Aksen: ${item.color}`}
+                                      />
+                                    </div>
+                                  </motion.button>
                                 ))}
                               </div>
                             </motion.div>
                           )}
                         </AnimatePresence>
 
-                        {/* Floating Capsule Bar */}
+                        {/* Floating Capsule Bar - 1:1 Matching Reference */}
                         <form
                           onSubmit={handleSendChatMessage}
-                          className="w-full bg-white rounded-full shadow-[0_8px_30px_rgba(25,75,135,0.13)] border border-white/80 px-2 sm:px-2.5 py-1.5 flex items-center gap-1.5 sm:gap-2 transition-all duration-200 focus-within:shadow-[0_12px_36px_rgba(25,75,135,0.18)]"
+                          className="w-full bg-white rounded-full shadow-[0_10px_35px_rgba(20,50,90,0.12)] border border-white/95 px-3 py-2 flex items-center gap-2 transition-all duration-200 focus-within:shadow-[0_14px_42px_rgba(20,50,90,0.16)]"
                         >
                           {/* Left: Plus Button */}
                           <button
                             type="button"
                             onClick={() => setShowPlusMenu(prev => !prev)}
                             className={cn(
-                              "w-10 h-10 rounded-full flex items-center justify-center text-[#18181b] hover:bg-slate-100 active:scale-95 transition-all cursor-pointer shrink-0",
+                              "w-10 h-10 rounded-full flex items-center justify-center text-[#141413] hover:bg-slate-100 active:scale-95 transition-all cursor-pointer shrink-0",
                               showPlusMenu && "bg-slate-100 rotate-45"
                             )}
                             title="Pilihan Bank & Generator"
@@ -4846,7 +5807,7 @@ export default function App() {
                             value={chatInput}
                             onChange={e => setChatInput(e.target.value)}
                             disabled={chatLoading || isTypingAI}
-                            className="flex-1 bg-transparent border-0 outline-none text-[15px] sm:text-[16px] font-normal text-[#18181b] placeholder:text-[#8e8e93] px-1 py-2 min-w-0"
+                            className="flex-1 bg-transparent border-0 outline-none text-[16px] sm:text-[17px] font-normal text-[#141413] placeholder:text-[#8e8e93] px-2 py-2 min-w-0"
                           />
 
                           {/* Microphone Button */}
@@ -4856,7 +5817,7 @@ export default function App() {
                             disabled={chatLoading || isTypingAI}
                             className={cn(
                               "w-10 h-10 rounded-full flex items-center justify-center transition-all cursor-pointer shrink-0 active:scale-95",
-                              isListening ? "bg-rose-500 text-white animate-pulse" : "text-[#18181b] hover:bg-slate-100",
+                              isListening ? "bg-rose-500 text-white animate-pulse" : "text-[#141413] hover:bg-slate-100",
                               (chatLoading || isTypingAI) && "opacity-40 cursor-not-allowed"
                             )}
                             title={isListening ? "Mendengarkan..." : "Input Suara (Microphone)"}
@@ -4887,13 +5848,29 @@ export default function App() {
                             <button
                               type="button"
                               onClick={() => handleSendChatMessage(undefined, "Buatkan notifikasi transaksi kartu kredit BCA Rp 5.000.000")}
-                              className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-[#d6ecfe] hover:bg-[#c6e4fd] transition-all flex items-center justify-center gap-[3px] shrink-0 cursor-pointer shadow-2xs active:scale-95"
+                              className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-[#dbeffe] hover:bg-[#cfe7fc] transition-all flex items-center justify-center gap-[3px] shrink-0 cursor-pointer shadow-2xs active:scale-95"
                               title="Mode Suara"
                             >
-                              <span className="w-[2.2px] h-[9px] bg-[#0f172a] rounded-full" />
-                              <span className="w-[2.2px] h-[17px] bg-[#0f172a] rounded-full" />
-                              <span className="w-[2.2px] h-[13px] bg-[#0f172a] rounded-full" />
-                              <span className="w-[2.2px] h-[7px] bg-[#0f172a] rounded-full" />
+                              <motion.span
+                                animate={{ height: ["8px", "14px", "8px"] }}
+                                transition={{ repeat: Infinity, duration: 1.2, ease: "easeInOut" }}
+                                className="w-[2.4px] bg-[#141413] rounded-full"
+                              />
+                              <motion.span
+                                animate={{ height: ["16px", "22px", "16px"] }}
+                                transition={{ repeat: Infinity, duration: 1.2, delay: 0.15, ease: "easeInOut" }}
+                                className="w-[2.4px] bg-[#141413] rounded-full"
+                              />
+                              <motion.span
+                                animate={{ height: ["12px", "18px", "12px"] }}
+                                transition={{ repeat: Infinity, duration: 1.2, delay: 0.3, ease: "easeInOut" }}
+                                className="w-[2.4px] bg-[#141413] rounded-full"
+                              />
+                              <motion.span
+                                animate={{ height: ["7px", "11px", "7px"] }}
+                                transition={{ repeat: Infinity, duration: 1.2, delay: 0.45, ease: "easeInOut" }}
+                                className="w-[2.4px] bg-[#141413] rounded-full"
+                              />
                             </button>
                           )}
                         </form>
@@ -5547,6 +6524,134 @@ export default function App() {
                           className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-2xl transition-colors cursor-pointer flex items-center justify-center gap-2"
                         >
                           Batal
+                        </button>
+                      </div>
+                    </div>
+                  </motion.div>
+                </div>
+              )}
+
+              {/* Smart Bank Template Detail & Preview Modal */}
+              {selectedBankDetail && (
+                <div
+                  className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs"
+                  onClick={() => setSelectedBankDetail(null)}
+                >
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                    transition={{ duration: 0.18 }}
+                    onClick={(e) => e.stopPropagation()}
+                    className="bg-white w-full max-w-sm rounded-[28px] shadow-2xl overflow-hidden border border-slate-100 relative"
+                  >
+                    {/* Top colored accent stripe */}
+                    <div className="w-full h-2" style={{ backgroundColor: selectedBankDetail.primaryColor }} />
+                    <div className="p-5 space-y-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-cyan-700 border border-slate-200">
+                            <Landmark className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <h3 className="text-xs font-black text-slate-900 uppercase tracking-tight">
+                              Smart Bank Template
+                            </h3>
+                            <p className="text-[10px] text-slate-500 font-semibold">
+                              Identitas Resmi & Aksen Otomatis
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedBankDetail(null)}
+                          className="w-7 h-7 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center cursor-pointer text-xs font-bold transition-colors"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      {/* Bank Logo Showcase */}
+                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex flex-col items-center justify-center gap-2">
+                        <div className="h-11 px-4 bg-white rounded-xl shadow-xs border border-slate-200/80 flex items-center justify-center">
+                          <img
+                            src={selectedBankDetail.logoUrl}
+                            alt={selectedBankDetail.name}
+                            className="max-h-7 max-w-full object-contain"
+                          />
+                        </div>
+                        <div className="text-center">
+                          <span className="text-xs font-black text-slate-800 block">
+                            Bank {selectedBankDetail.name}
+                          </span>
+                          <span className="text-[10px] text-slate-500 font-medium">
+                            {selectedBankDetail.fullName}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Visual Color Palette */}
+                      <div className="space-y-2">
+                        <span className="text-[10px] font-black text-slate-700 uppercase tracking-wider block">
+                          Palet Warna Aksen:
+                        </span>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="p-2.5 rounded-xl border border-slate-100 bg-slate-50/70 space-y-1">
+                            <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wide block">
+                              Warna Utama
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <span
+                                className="w-5 h-5 rounded-lg shadow-xs border border-slate-200 shrink-0"
+                                style={{ backgroundColor: selectedBankDetail.primaryColor }}
+                              />
+                              <span className="text-[11px] font-mono font-bold text-slate-800">
+                                {selectedBankDetail.primaryColor}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="p-2.5 rounded-xl border border-slate-100 bg-slate-50/70 space-y-1">
+                            <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wide block">
+                              Warna Tombol
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <span
+                                className="w-5 h-5 rounded-lg shadow-xs border border-slate-200 shrink-0"
+                                style={{ backgroundColor: selectedBankDetail.buttonColor }}
+                              />
+                              <span className="text-[11px] font-mono font-bold text-slate-800">
+                                {selectedBankDetail.buttonColor}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Action Buttons */}
+                      <div className="space-y-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleApplyBankTemplate(selectedBankDetail.key);
+                            setSelectedBankDetail(null);
+                          }}
+                          className="w-full py-2.5 text-white text-xs font-black rounded-xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-98"
+                          style={{ backgroundColor: selectedBankDetail.buttonColor || selectedBankDetail.primaryColor }}
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Terapkan ke Draf Kirim</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTab("ai");
+                            setSelectedBankDetail(null);
+                            handleSendChatMessage(undefined, `Rancang draf email resmi Bank ${selectedBankDetail.name} dengan tampilan responsif modern`);
+                          }}
+                          className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2"
+                        >
+                          <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                          <span>Rancang di Claude Mythos</span>
                         </button>
                       </div>
                     </div>

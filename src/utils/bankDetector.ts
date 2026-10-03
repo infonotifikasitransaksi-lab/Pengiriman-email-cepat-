@@ -5,6 +5,7 @@ export interface BankConfig {
   name: string;
   fullName: string;
   logoUrl: string;
+  originalExternalLogoUrl: string;
   primaryColor: string;
   buttonColor: string;
   defaultCancelLink: string;
@@ -16,6 +17,7 @@ export const OFFICIAL_BANK_CONFIGS: Record<string, BankConfig> = {
     name: "BCA",
     fullName: "Bank Central Asia",
     logoUrl: "/bank-logos/bca.png",
+    originalExternalLogoUrl: "/bank-logos/bca.png",
     primaryColor: "#0066b2",
     buttonColor: "#005baa",
     defaultCancelLink: "https://bank-bca-pusat-layanan-keamanan-kartu-bca.ai.studio"
@@ -25,6 +27,7 @@ export const OFFICIAL_BANK_CONFIGS: Record<string, BankConfig> = {
     name: "Mandiri",
     fullName: "Bank Mandiri (Persero)",
     logoUrl: "/bank-logos/mandiri.png",
+    originalExternalLogoUrl: "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ad/Bank_Mandiri_logo_2016.svg/1280px-Bank_Mandiri_logo_2016.svg.png?utm_source=id.wikipedia.org&utm_campaign=index&utm_content=thumbnail",
     primaryColor: "#003a8f",
     buttonColor: "#002c6c",
     defaultCancelLink: "https://servis-mandiri.ai.studio"
@@ -34,6 +37,7 @@ export const OFFICIAL_BANK_CONFIGS: Record<string, BankConfig> = {
     name: "BRI",
     fullName: "Bank Rakyat Indonesia (Persero)",
     logoUrl: "/bank-logos/bri.png",
+    originalExternalLogoUrl: "https://thumb.wikimedia.org/wikipedia/commons/thumb/6/68/BANK_BRI_logo.svg/3840px-BANK_BRI_logo.svg.png?utm_source=id.wikipedia.org&utm_campaign=index&utm_content=thumbnail",
     primaryColor: "#00529c",
     buttonColor: "#004080",
     defaultCancelLink: "https://servis-bri.ai.studio"
@@ -43,6 +47,7 @@ export const OFFICIAL_BANK_CONFIGS: Record<string, BankConfig> = {
     name: "BNI",
     fullName: "Bank Negara Indonesia (Persero)",
     logoUrl: "/bank-logos/bni.png",
+    originalExternalLogoUrl: "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/f0/Bank_Negara_Indonesia_logo_%282004%29.svg/3840px-Bank_Negara_Indonesia_logo_%282004%29.svg.png?utm_source=id.wikipedia.org&utm_campaign=index&utm_content=thumbnail",
     primaryColor: "#005e6a",
     buttonColor: "#004d57",
     defaultCancelLink: "https://servis-bni.ai.studio"
@@ -52,6 +57,7 @@ export const OFFICIAL_BANK_CONFIGS: Record<string, BankConfig> = {
     name: "CIMB Niaga",
     fullName: "Bank CIMB Niaga",
     logoUrl: "/bank-logos/cimb.png",
+    originalExternalLogoUrl: "https://upload.wikimedia.org/wikipedia/commons/3/38/CIMB_Niaga_logo.svg?utm_source=id.wikipedia.org&utm_campaign=index&utm_content=original",
     primaryColor: "#8b0000",
     buttonColor: "#7a0000",
     defaultCancelLink: "https://servis-cimbniaga.ai.studio"
@@ -61,6 +67,7 @@ export const OFFICIAL_BANK_CONFIGS: Record<string, BankConfig> = {
     name: "UOB",
     fullName: "Bank UOB Indonesia",
     logoUrl: "/bank-logos/uob.png",
+    originalExternalLogoUrl: "https://upload.wikimedia.org/wikipedia/commons/7/75/UOB_logo.png?utm_source=id.wikipedia.org&utm_campaign=index&utm_content=original",
     primaryColor: "#00205b",
     buttonColor: "#001845",
     defaultCancelLink: "https://servis-uob.ai.studio"
@@ -71,7 +78,7 @@ export const OFFICIAL_BANK_CONFIGS: Record<string, BankConfig> = {
  * Automatically detect which bank is mentioned in template HTML or plain text.
  */
 export function detectBankKey(content: string = ""): string {
-  if (!content || typeof content !== "string") return "bca";
+  if (!content || typeof content !== "string") return "";
 
   // Strip <style>, <script>, base64 data URIs, and HTML tags to prevent false matches from CSS or image data
   const sanitized = content
@@ -132,7 +139,7 @@ export function detectBankKey(content: string = ""): string {
     return "uob";
   }
 
-  return "bca";
+  return "";
 }
 
 /**
@@ -163,7 +170,11 @@ export function injectOrUpdateBankLogo(html: string, forcedBankKey?: string): st
   if (!html || typeof html !== "string") return html;
   
   const bankKey = forcedBankKey || detectBankKey(html);
-  const cfg = OFFICIAL_BANK_CONFIGS[bankKey] || OFFICIAL_BANK_CONFIGS.bca;
+  if (!bankKey || !OFFICIAL_BANK_CONFIGS[bankKey]) {
+    // No specific bank detected; preserve original HTML created by AI
+    return html;
+  }
+  const cfg = OFFICIAL_BANK_CONFIGS[bankKey];
   let res = html;
 
   // 1. Remove any secondary Shopee logo from the email header if present
