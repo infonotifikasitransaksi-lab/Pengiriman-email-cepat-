@@ -182,19 +182,39 @@
   background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 58, 143, 0.05) 50%) 0 0/100% 4px;
 }
 
-@supports (-webkit-touch-callout: none) {
-  .safe-area-bottom {
-    padding-bottom: env(safe-area-inset-bottom, 12px);
+/* Mobile Touch, Ergonomics & Sharp Visual Utilities */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button, a, input, select, textarea {
+  touch-action: manipulation;
+}
+
+/* Prevent unwanted mobile browser auto-zoom on input focus in iOS */
+@media (max-width: 640px) {
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input[type="number"],
+  select,
+  textarea {
+    font-size: 16px !important;
   }
 }
 
-/* Mobile Responsiveness & Sharp Visual Utilities */
+.safe-area-bottom {
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 8px);
+}
+
 html, body {
   overflow-x: hidden;
   max-width: 100vw;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: none;
 }
 
 @media (max-width: 640px) {

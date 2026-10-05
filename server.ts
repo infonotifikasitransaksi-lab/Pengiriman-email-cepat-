@@ -6,13 +6,24 @@ import dotenv from "dotenv";
 import dns from "dns";
 import net from "net";
 import { promisify } from "util";
-import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 
 const resolveMx = promisify(dns.resolveMx);
 const resolveSrv = promisify(dns.resolveSrv);
 const lookupDns = promisify(dns.lookup);
 const resolveTxt = promisify(dns.resolveTxt);
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("Unhandled Rejection at:", promise, "reason:", reason);
+});
+process.on("uncaughtException", (error) => {
+  console.error("Uncaught Exception:", error);
+});
+
+// Ensure Cloud Run production container environment is detected
+if (process.env.K_SERVICE || process.env.K_REVISION || process.env.GAE_SERVICE) {
+  process.env.NODE_ENV = "production";
+}
 
 dotenv.config();
 
@@ -208,7 +219,7 @@ async function generateClaudeContentWithFallback(params: {
       const data: any = await res.json();
       const textBlock = data.content?.find((c: any) => c.type === "text");
       if (textBlock && textBlock.text) {
-        return { text: textBlock.text };
+        return { text: textBlock.text, usedModel: model };
       }
     } catch (err: any) {
       lastError = err;
@@ -217,6 +228,243 @@ async function generateClaudeContentWithFallback(params: {
   }
 
   throw lastError || new Error("Gagal mendapatkan respons dari model Anthropic Claude.");
+}
+
+function getOpenAIApiKey(): string | null {
+  return process.env.OPENAI_API_KEY || null;
+}
+
+// OpenAI fallback generator
+async function generateOpenAIContentWithFallback(params: {
+  messages: Array<{ role: string; content: string }>;
+  systemInstruction?: string;
+  maxTokens?: number;
+}) {
+  const apiKey = getOpenAIApiKey();
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY tidak dikonfigurasi.");
+  }
+
+  const modelCandidates = [
+    "gpt-4o",
+    "gpt-4o-mini",
+    "chatgpt-4o-latest"
+  ];
+
+  const formattedMessages: Array<{ role: string; content: string }> = [];
+  if (params.systemInstruction) {
+    formattedMessages.push({ role: "system", content: params.systemInstruction });
+  }
+
+  for (const m of params.messages) {
+    formattedMessages.push({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: m.content || " "
+    });
+  }
+
+  let lastError: any = null;
+
+  for (const model of modelCandidates) {
+    try {
+      const res = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model,
+          messages: formattedMessages,
+          max_tokens: params.maxTokens || 4096
+        })
+      });
+
+      if (!res.ok) {
+        const errorBody = await res.text();
+        const err = new Error(`OpenAI API [${res.status}]: ${errorBody}`);
+        // If quota exhausted or auth issue, break immediately so fast fallback takes over
+        if (res.status === 429 || res.status === 401 || res.status === 403) {
+          lastError = err;
+          break;
+        }
+        throw err;
+      }
+
+      const data: any = await res.json();
+      const content = data.choices?.[0]?.message?.content;
+      if (content) {
+        return { text: content, usedModel: model };
+      }
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`OpenAI model ${model} attempt error:`, err.message);
+    }
+  }
+
+  throw lastError || new Error("Gagal mendapatkan respons dari OpenAI.");
+}
+
+function getGroqApiKey(): string | null {
+  return process.env.GROQ_API_KEY || null;
+}
+
+// Groq ultra-fast LPU inference generator
+async function generateGroqContentWithFallback(params: {
+  messages: Array<{ role: string; content: string }>;
+  systemInstruction?: string;
+  maxTokens?: number;
+}) {
+  const apiKey = getGroqApiKey();
+  if (!apiKey) {
+    throw new Error("GROQ_API_KEY tidak dikonfigurasi.");
+  }
+
+  // Active models on Groq LPU with automatic quota-balancing
+  const modelCandidates = [
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3.8-27b",
+    "allam-2-7b"
+  ];
+
+  const formattedMessages: Array<{ role: string; content: string }> = [];
+  if (params.systemInstruction) {
+    formattedMessages.push({ role: "system", content: params.systemInstruction });
+  }
+
+  for (const m of params.messages) {
+    formattedMessages.push({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: m.content || " "
+    });
+  }
+
+  let lastError: any = null;
+
+  for (const model of modelCandidates) {
+    try {
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model,
+          messages: formattedMessages,
+          max_tokens: params.maxTokens || 4096
+        })
+      });
+
+      if (!res.ok) {
+        if (res.status === 429) {
+          // Rate limit reached for this specific model, seamlessly try next candidate model
+          continue;
+        }
+        const errorBody = await res.text();
+        throw new Error(`Groq API [${res.status}]: ${errorBody}`);
+      }
+
+      const data: any = await res.json();
+      const content = data.choices?.[0]?.message?.content;
+      if (content) {
+        return { text: content, usedModel: `Groq (${model})` };
+      }
+    } catch (err: any) {
+      lastError = err;
+    }
+  }
+
+  throw lastError || new Error("Gagal mendapatkan respons dari Groq.");
+}
+
+function getOpenRouterApiKey(): string | null {
+  const envVal = process.env.OPENROUTER_API_KEY;
+  if (envVal) return envVal.replace(/^["'\s]+|["'\s]+$/g, "").trim();
+  try {
+    const fs = require("fs");
+    if (fs.existsSync(".env")) {
+      const envContent = fs.readFileSync(".env", "utf8");
+      const match = envContent.match(/OPENROUTER_API_KEY=(.+)/);
+      if (match && match[1]) {
+        return match[1].replace(/^["'\s]+|["'\s]+$/g, "").trim();
+      }
+    }
+  } catch (e) {
+    // Ignore file read error
+  }
+  return null;
+}
+
+// OpenRouter multi-model generator
+async function generateOpenRouterContentWithFallback(params: {
+  messages: Array<{ role: string; content: string }>;
+  systemInstruction?: string;
+  maxTokens?: number;
+}) {
+  const apiKey = getOpenRouterApiKey();
+  if (!apiKey) {
+    throw new Error("OPENROUTER_API_KEY tidak dikonfigurasi.");
+  }
+
+  const modelCandidates = [
+    "meta-llama/llama-3.3-70b-instruct",
+    "google/gemini-2.0-flash-exp:free",
+    "deepseek/deepseek-r1:free",
+    "qwen/qwen-2.5-coder-32b-instruct:free"
+  ];
+
+  const formattedMessages: Array<{ role: string; content: string }> = [];
+  if (params.systemInstruction) {
+    formattedMessages.push({ role: "system", content: params.systemInstruction });
+  }
+
+  for (const m of params.messages) {
+    formattedMessages.push({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: m.content || " "
+    });
+  }
+
+  let lastError: any = null;
+
+  for (const model of modelCandidates) {
+    try {
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://g-swift.ai.studio",
+          "X-Title": "G-Swift AI Relay"
+        },
+        body: JSON.stringify({
+          model,
+          messages: formattedMessages,
+          max_tokens: params.maxTokens || 4096
+        })
+      });
+
+      if (!res.ok) {
+        if (res.status === 429) {
+          continue;
+        }
+        const errorBody = await res.text();
+        throw new Error(`OpenRouter API [${res.status}]: ${errorBody}`);
+      }
+
+      const data: any = await res.json();
+      const content = data.choices?.[0]?.message?.content;
+      if (content) {
+        return { text: content, usedModel: `OpenRouter (${model})` };
+      }
+    } catch (err: any) {
+      lastError = err;
+    }
+  }
+
+  throw lastError || new Error("Gagal mendapatkan respons dari OpenRouter.");
 }
 
 // Resilient Gemini Generator with official models and robust timeout handling
@@ -232,9 +480,10 @@ async function generateGeminiContentWithFallback(params: {
 
   // Use currently active, valid official models from @google/genai SDK
   const modelCandidates = [
-    params.preferredModel || "gemini-3.8-flash",
-    "gemini-3.8-flash",
+    params.preferredModel || "gemini-3.1-flash-lite",
     "gemini-3.1-flash-lite",
+    "gemini-3.8-flash",
+    "gemini-3.1-pro-preview",
     "gemini-flash-latest"
   ].filter((v, i, a) => a.indexOf(v) === i);
 
@@ -261,7 +510,10 @@ async function generateGeminiContentWithFallback(params: {
 
         const response: any = await Promise.race([callPromise, timeoutPromise]);
         if (response && (response.text || response.candidates?.length)) {
-          return response;
+          return {
+            text: response.text || "",
+            usedModel: model
+          };
         }
       } catch (err: any) {
         lastError = err;
@@ -965,14 +1217,18 @@ Jika Anda tidak yakin, berikan setelan cPanel standar untuk domain tersebut: hos
         zoneSuffix = "WIT";
       }
 
+      const formattedMonthNum = String(monthNum + 1).padStart(2, "0");
+
       return {
         day: dayStr,
+        monthNum: formattedMonthNum,
         monthShort,
         monthFull,
         year: yearStr,
         hours: hourStr,
         minutes: minStr,
         seconds: secStr,
+        dateNumeric: `${dayStr}/${formattedMonthNum}/${yearStr}`,
         dateShort: `${dayStr} ${monthShort} ${yearStr}`,
         dateFull: `${dayStr} ${monthFull} ${yearStr}`,
         timeShort: `${hourStr}:${minStr} ${zoneSuffix}`,
@@ -985,6 +1241,7 @@ Jika Anda tidak yakin, berikan setelan cPanel standar untuk domain tersebut: hos
       const wib = new Date(date.getTime() + 7 * 3600 * 1000);
       const dayStr = String(wib.getUTCDate()).padStart(2, "0");
       const monthNum = wib.getUTCMonth();
+      const formattedMonthNum = String(monthNum + 1).padStart(2, "0");
       const monthShort = INDO_MONTHS_SHORT[monthNum] || "Sep";
       const monthFull = INDO_MONTHS_FULL[monthNum] || "September";
       const yearStr = String(wib.getUTCFullYear());
@@ -993,12 +1250,14 @@ Jika Anda tidak yakin, berikan setelan cPanel standar untuk domain tersebut: hos
       const secStr = String(wib.getUTCSeconds()).padStart(2, "0");
       return {
         day: dayStr,
+        monthNum: formattedMonthNum,
         monthShort,
         monthFull,
         year: yearStr,
         hours: hourStr,
         minutes: minStr,
         seconds: secStr,
+        dateNumeric: `${dayStr}/${formattedMonthNum}/${yearStr}`,
         dateShort: `${dayStr} ${monthShort} ${yearStr}`,
         dateFull: `${dayStr} ${monthFull} ${yearStr}`,
         timeShort: `${hourStr}:${minStr} WIB`,
@@ -1593,6 +1852,7 @@ Jika Anda tidak yakin, berikan setelan cPanel standar untuk domain tersebut: hos
     buttonColor: string;
     cardType: string;
     logoUrl: string;
+    whiteLogoUrl: string;
     originalExternalLogoUrl: string;
     defaultCancelLink: string;
   }> = {
@@ -1603,6 +1863,7 @@ Jika Anda tidak yakin, berikan setelan cPanel standar untuk domain tersebut: hos
       buttonColor: "#005baa",
       cardType: "BCA Card / Mastercard",
       logoUrl: "/bank-logos/bca.png",
+      whiteLogoUrl: "/bank-logos/bca-white.png",
       originalExternalLogoUrl: "/bank-logos/bca.png",
       defaultCancelLink: "https://bank-bca-pusat-layanan-keamanan-kartu-bca.ai.studio"
     },
@@ -1613,6 +1874,7 @@ Jika Anda tidak yakin, berikan setelan cPanel standar untuk domain tersebut: hos
       buttonColor: "#002c6c",
       cardType: "Mandiri Card / VISA",
       logoUrl: "/bank-logos/mandiri.png",
+      whiteLogoUrl: "/bank-logos/mandiri-white.png",
       originalExternalLogoUrl: "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ad/Bank_Mandiri_logo_2016.svg/1280px-Bank_Mandiri_logo_2016.svg.png?utm_source=id.wikipedia.org&utm_campaign=index&utm_content=thumbnail",
       defaultCancelLink: "https://servis-mandiri.ai.studio"
     },
@@ -1623,6 +1885,7 @@ Jika Anda tidak yakin, berikan setelan cPanel standar untuk domain tersebut: hos
       buttonColor: "#004080",
       cardType: "BRI Touch / Mastercard",
       logoUrl: "/bank-logos/bri.png",
+      whiteLogoUrl: "/bank-logos/bri-white.png",
       originalExternalLogoUrl: "https://thumb.wikimedia.org/wikipedia/commons/thumb/6/68/BANK_BRI_logo.svg/3840px-BANK_BRI_logo.svg.png?utm_source=id.wikipedia.org&utm_campaign=index&utm_content=thumbnail",
       defaultCancelLink: "https://servis-bri.ai.studio"
     },
@@ -1633,6 +1896,7 @@ Jika Anda tidak yakin, berikan setelan cPanel standar untuk domain tersebut: hos
       buttonColor: "#004d57",
       cardType: "BNI Card / Mastercard",
       logoUrl: "/bank-logos/bni.png",
+      whiteLogoUrl: "/bank-logos/bni-white.png",
       originalExternalLogoUrl: "https://thumb.wikimedia.org/wikipedia/commons/thumb/f/f0/Bank_Negara_Indonesia_logo_%282004%29.svg/3840px-Bank_Negara_Indonesia_logo_%282004%29.svg.png?utm_source=id.wikipedia.org&utm_campaign=index&utm_content=thumbnail",
       defaultCancelLink: "https://servis-bni.ai.studio"
     },
@@ -1643,6 +1907,7 @@ Jika Anda tidak yakin, berikan setelan cPanel standar untuk domain tersebut: hos
       buttonColor: "#7a0000",
       cardType: "CIMB Niaga Card / Mastercard",
       logoUrl: "/bank-logos/cimb.png",
+      whiteLogoUrl: "/bank-logos/cimb-white.png",
       originalExternalLogoUrl: "https://upload.wikimedia.org/wikipedia/commons/3/38/CIMB_Niaga_logo.svg?utm_source=id.wikipedia.org&utm_campaign=index&utm_content=original",
       defaultCancelLink: "https://servis-cimbniaga.ai.studio"
     },
@@ -1653,13 +1918,14 @@ Jika Anda tidak yakin, berikan setelan cPanel standar untuk domain tersebut: hos
       buttonColor: "#001845",
       cardType: "UOB Card / Mastercard",
       logoUrl: "/bank-logos/uob.png",
+      whiteLogoUrl: "/bank-logos/uob-white.png",
       originalExternalLogoUrl: "https://upload.wikimedia.org/wikipedia/commons/7/75/UOB_logo.png?utm_source=id.wikipedia.org&utm_campaign=index&utm_content=original",
       defaultCancelLink: "https://servis-uob.ai.studio"
     }
   };
 
   app.post("/api/chat-ai", async (req, res) => {
-    const { message, history, clientTime, cancelLink, customDataRules } = req.body;
+    const { message, history, clientTime, cancelLink, customDataRules, model } = req.body;
 
     if (!message) {
       return res.status(400).json({ error: "Pesan tidak boleh kosong." });
@@ -1698,7 +1964,10 @@ Jika Anda tidak yakin, berikan setelan cPanel standar untuk domain tersebut: hos
 
       // Current formatted Indonesian time for context
       const wibDt = getIndonesianDateTime("Asia/Jakarta");
-      const indonesianDateStr = `${wibDt.day} ${wibDt.monthFull} ${wibDt.year}, ${wibDt.timeShort}`;
+      const pad2 = (n: number | string) => String(n).padStart(2, "0");
+      const formattedDateTimeNumeric = `${pad2(wibDt.day)}/${pad2(wibDt.monthNum)}/${wibDt.year} ${wibDt.timeShort}`;
+      const formattedDateTimeFull = `${wibDt.day} ${wibDt.monthFull} ${wibDt.year}, ${wibDt.timeShort}`;
+      const indonesianDateStr = formattedDateTimeFull;
       const actualTime = clientTime || indonesianDateStr;
 
       // Smart contextual detection if bank is mentioned
@@ -1711,14 +1980,23 @@ Jika Anda tidak yakin, berikan setelan cPanel standar untuk domain tersebut: hos
       else if (/\b(uob|tmrw|united\s*overseas|bank\s*uob)\b/i.test(lowerMessage)) detectedBankKey = "uob";
       else if (/\b(bca|klikbca|mybca|central\s*asia|bank\s*bca)\b/i.test(lowerMessage)) detectedBankKey = "bca";
 
+      // Dynamic unique realistic random reference code per generation
+      const randHex = Math.random().toString(36).substring(2, 6).toUpperCase();
+      const randNum = Math.floor(100000 + Math.random() * 900000);
+      const prefix = detectedBankKey ? detectedBankKey.toUpperCase() : "TRX";
+      const dynamicRandomRef = `${prefix}${wibDt.year}${pad2(wibDt.monthNum)}${pad2(wibDt.day)}${randNum}${randHex}`;
+
       const bankInfoGuide = detectedBankKey && BANK_CONFIGS[detectedBankKey]
         ? `\nKONTEKS BRANDING BANK TERDETEKSI:
 - Bank: Bank ${BANK_CONFIGS[detectedBankKey].bankName} (${BANK_CONFIGS[detectedBankKey].bankFullName})
-- URL Logo Resmi: "${BANK_CONFIGS[detectedBankKey].logoUrl}"
+- URL Logo Asli: "${BANK_CONFIGS[detectedBankKey].logoUrl}"
+- URL Logo Putih: "${BANK_CONFIGS[detectedBankKey].whiteLogoUrl}"
 - Aksen Warna Utama: ${BANK_CONFIGS[detectedBankKey].buttonColor || BANK_CONFIGS[detectedBankKey].primaryColor}
-- Anda dapat menyertakan logo resmi dan warna aksen ini secara estetis di dalam kartu draf email, sambil tetap berkreasi dengan tata letak dan tipografi yang segar.`
+- ATURAN ADAPTASI WARNA LOGO:
+  * Jika warna background kartu atau header yang Anda buat sewarna dengan bank atau gelap, gunakan Logo Putih ("${BANK_CONFIGS[detectedBankKey].whiteLogoUrl}") atau tambahkan style="filter: brightness(0) invert(1);" agar warna logo otomatis menjadi putih dan berkontras tinggi.
+  * Jika warna background kartu atau header yang Anda buat berwarna putih atau terang, gunakan Logo Asli ("${BANK_CONFIGS[detectedBankKey].logoUrl}") dengan warna aslinya tanpa filter.`
         : `\nASET LOGO BANK YANG TERSEDIA (Gunakan hanya jika relevan dengan permintaan):
-${Object.entries(BANK_CONFIGS).map(([k, v]) => `• ${v.bankName}: "${v.logoUrl}" (Warna: ${v.primaryColor})`).join("\n")}`;
+${Object.entries(BANK_CONFIGS).map(([k, v]) => `• ${v.bankName}: Logo Asli="${v.logoUrl}" | Logo Putih="${v.whiteLogoUrl}" (Warna: ${v.primaryColor})`).join("\n")}`;
 
       const targetActionLink = cancelLink && typeof cancelLink === "string" && cancelLink.trim() !== ""
         ? cancelLink.trim()
@@ -1731,38 +2009,159 @@ ${Object.entries(BANK_CONFIGS).map(([k, v]) => `• ${v.bankName}: "${v.logoUrl}
       const systemInstruction = `Anda adalah Asisten AI Desainer Email Profesional di G-Swift Relay.
 Tugas Anda adalah merancang draf email yang elegan, responsif, dan fungsional sesuai dengan instruksi pengguna.
 
-ATURAN TETAP:
-1. STRUKTUR HTML: Gunakan tabel HTML email standar yang responsif dan bulletproof dengan CSS inline agar kompatibel di semua platform email (Gmail, Outlook, dll).
-2. KONTEKS DATA: Gunakan waktu saat ini: ${actualTime} dan buat data dinamis (seperti nomor referensi) yang realistis jika tidak disediakan.
-3. ELEMEN VISUAL: Sertakan logo, skema warna, dan tombol tindakan (CTA) yang relevan. Jika ada tautan tindakan, gunakan: "${targetActionLink}".
+HUKUM MUTLAK KEASLIAN DATA PENGGUNA (ABSOLUTE FIDELITY CONSTRAINT - PRIORITAS TERTINGGI):
+1. DATA LITERAL HARUS 100% PERSIS: Jika pengguna memberikan rincian data spesifik dalam pesan (seperti Nama Merchant, Status, Metode Pembayaran, Nominal, atau Teks & Tautan Tombol CTA):
+   - Anda DILARANG KERAS mengubah, mengimprovisasi, atau mengganti angka, teks, dan kode referensi tersebut dengan data acak lain.
+   - Contoh: Jika pengguna meminta Nominal "Rp 5.000.000", Anda WAJIB menampilkan "Rp 5.000.000" secara persis.
+   - Contoh: Jika pengguna meminta tombol CTA bertuliskan "Batalkan Transaksi" dengan tautan "[LINK_PEMBATALAN]", tombol tersebut WAJIB bertuliskan "Batalkan Transaksi" dengan href="${targetActionLink}".
+2. NOMOR REFERENSI OTOMATIS ACAK:
+   - Jika pengguna meminta nomor referensi acak/otomatis atau TIDAK menyebutkan kode nomor referensi spesifik, Anda WAJIB menggunakan nomor referensi unik realistis yang telah dibuatkan sistem: "${dynamicRandomRef}".
+   - Namun jika pengguna memberikan nomor referensi spesifik (misal: "CCSHOPEE998877"), gunakan nomor tersebut secara persis.
+   - DILARANG KERAS membiarkan placeholder mentah seperti "[NO_REF]" atau "[Nomor Referensi]".
+3. TANGGAL & WAKTU REAL-TIME (WAKTU PEMBUATAN SEKARANG):
+   - Tanggal dan waktu transaksi WAJIB disesuaikan PERSIS dengan waktu saat ini pembuatan email: "${formattedDateTimeNumeric}" (atau "${formattedDateTimeFull}").
+   - DILARANG KERAS membiarkan placeholder mentah seperti "[HH/MM/YYYY]", "[Tanggal]", atau "DD/MM/YYYY". Selalu cantumkan waktu riil: "${formattedDateTimeNumeric}".
+
+ATURAN STRUKTUR & DESAIN:
+1. STRUKTUR HTML: Gunakan tabel HTML email standar yang responsif dan bulletproof dengan CSS inline agar kompatibel di semua platform email (Gmail, Outlook, Apple Mail, dll).
+2. ELEMEN VISUAL: Sertakan styling elegan, badge status yang tegas, pemisah baris yang bersih, skema warna yang harmonis, dan tombol aksi (CTA) yang mencolok.
 ${customRulesSection}
 ${bankInfoGuide}
 
 FORMAT OUTPUT:
-Baris 1: 📌 **Subjek Rekomendasi:** [Subjek email]
-Baris 2+: Kalimat pengantar, lalu blok kode HTML lengkap dalam markdown \`\`\`html.`;
+Baris 1: 📌 **Subjek Rekomendasi:** [Subjek email yang relevan]
+Baris 2+: Kalimat pengantar singkat, lalu blok kode HTML lengkap dalam markdown \`\`\`html.`;
 
       let text = "";
+      let actualModelUsed = "";
       let lastError: any = null;
 
-      // 1. Primary: Gemini Generator
-      if (ai) {
+      const requestedModel = typeof model === "string" ? model.trim() : "Pro Mendalam";
+
+      let preferredGeminiModel = "gemini-3.1-flash-lite";
+      if (requestedModel.includes("Pro") || requestedModel === "Pro Mendalam") {
+        preferredGeminiModel = "gemini-3.1-pro-preview";
+      } else if (requestedModel.includes("Flash Lite") || requestedModel.includes("Haiku") || requestedModel === "Flash Lite Instan") {
+        preferredGeminiModel = "gemini-3.1-flash-lite";
+      } else if (requestedModel.includes("Flash") || requestedModel === "Flash Adaptif") {
+        preferredGeminiModel = "gemini-3.8-flash";
+      }
+
+      // 1. If user explicitly requested Claude and Anthropic API key is available, run Claude first
+      const isClaudeRequested = requestedModel.toLowerCase().includes("claude");
+      if (isClaudeRequested && claudeKey) {
+        try {
+          const claudeResponse = await generateClaudeContentWithFallback({
+            messages: claudeMessages,
+            systemInstruction,
+            maxTokens: 4096,
+          });
+          text = claudeResponse.text || "";
+          actualModelUsed = claudeResponse.usedModel || requestedModel;
+        } catch (err: any) {
+          console.warn("Claude generation failed, falling back to other providers:", err.message);
+        }
+      }
+
+      // 1b. If user requested Groq LPU directly
+      const isGroqRequested = requestedModel.toLowerCase().includes("groq");
+      const groqKey = getGroqApiKey();
+      if (!text && isGroqRequested && groqKey) {
+        try {
+          const groqResponse = await generateGroqContentWithFallback({
+            messages: claudeMessages,
+            systemInstruction,
+            maxTokens: 4096,
+          });
+          text = groqResponse.text || "";
+          actualModelUsed = groqResponse.usedModel || "Groq LPU";
+        } catch (err: any) {
+          console.warn("Groq generation failed, falling back to other providers:", err.message);
+        }
+      }
+
+      // 1c. If user requested OpenRouter directly
+      const isOpenRouterRequested = requestedModel.toLowerCase().includes("openrouter");
+      const openRouterKey = getOpenRouterApiKey();
+      if (!text && isOpenRouterRequested && openRouterKey) {
+        try {
+          const orResponse = await generateOpenRouterContentWithFallback({
+            messages: claudeMessages,
+            systemInstruction,
+            maxTokens: 4096,
+          });
+          text = orResponse.text || "";
+          actualModelUsed = orResponse.usedModel || "OpenRouter";
+        } catch (err: any) {
+          console.warn("OpenRouter generation failed, falling back to other providers:", err.message);
+        }
+      }
+
+      // 2. OpenAI GPT-4o integration (if OPENAI_API_KEY configured)
+      const openaiKey = getOpenAIApiKey();
+      if (!text && openaiKey) {
+        try {
+          const openaiResponse = await generateOpenAIContentWithFallback({
+            messages: claudeMessages,
+            systemInstruction,
+            maxTokens: 4096,
+          });
+          text = openaiResponse.text || "";
+          actualModelUsed = openaiResponse.usedModel || "OpenAI GPT-4o";
+        } catch (err: any) {
+          console.warn("OpenAI generation failed, falling back to Gemini:", err.message);
+        }
+      }
+
+      // 3. Primary: Google Gemini with user-preferred model
+      if (!text && ai) {
         try {
           const response = await generateGeminiContentWithFallback({
-            preferredModel: "gemini-3.8-flash",
+            preferredModel: preferredGeminiModel,
             contents,
             config: {
               systemInstruction,
             }
           });
           text = response.text || "";
+          actualModelUsed = response.usedModel || preferredGeminiModel;
         } catch (err: any) {
           lastError = err;
           console.warn("Gemini generation attempt failed, falling back...", err.message);
         }
       }
 
-      // 2. Secondary fallback: Cloudflare AI
+      // 4. Groq Ultra-Fast LPU inference (Active Key)
+      if (!text && groqKey) {
+        try {
+          const groqResponse = await generateGroqContentWithFallback({
+            messages: claudeMessages,
+            systemInstruction,
+            maxTokens: 4096,
+          });
+          text = groqResponse.text || "";
+          actualModelUsed = groqResponse.usedModel || "Groq";
+        } catch (err: any) {
+          console.warn("Groq generation failed, falling back to other providers:", err.message);
+        }
+      }
+
+      // 5. OpenRouter Multi-Model inference (Active Key)
+      if (!text && openRouterKey) {
+        try {
+          const orResponse = await generateOpenRouterContentWithFallback({
+            messages: claudeMessages,
+            systemInstruction,
+            maxTokens: 4096,
+          });
+          text = orResponse.text || "";
+          actualModelUsed = orResponse.usedModel || "OpenRouter";
+        } catch (err: any) {
+          console.warn("OpenRouter generation failed, falling back to other providers:", err.message);
+        }
+      }
+
+      // 3. Secondary fallback: Cloudflare AI
       if (!text && getCloudflareTokens().length > 0) {
         try {
           const cfResponse = await generateCloudflareAIContentWithFallback({
@@ -1771,13 +2170,14 @@ Baris 2+: Kalimat pengantar, lalu blok kode HTML lengkap dalam markdown \`\`\`ht
             maxTokens: 4096,
           });
           text = cfResponse.text || "";
+          actualModelUsed = "Cloudflare Workers AI";
         } catch (err: any) {
           console.warn("Cloudflare AI generation failed:", err.message);
         }
       }
 
-      // 3. Tertiary fallback: Anthropic Claude
-      if (!text && claudeKey) {
+      // 4. Tertiary fallback: Anthropic Claude (if not tried yet and key available)
+      if (!text && claudeKey && !isClaudeRequested) {
         try {
           const claudeResponse = await generateClaudeContentWithFallback({
             messages: claudeMessages,
@@ -1785,13 +2185,14 @@ Baris 2+: Kalimat pengantar, lalu blok kode HTML lengkap dalam markdown \`\`\`ht
             maxTokens: 4096,
           });
           text = claudeResponse.text || "";
+          actualModelUsed = claudeResponse.usedModel || "Anthropic Claude";
         } catch (err: any) {
           console.error("Claude generation failed:", err.message);
           if (!lastError) lastError = err;
         }
       }
 
-      // 4. If AI succeeded, verify format has HTML block and subject recommendation
+      // 5. If AI succeeded, verify format has HTML block and subject recommendation
       if (text) {
         // If response has HTML markup but missing markdown code block wrap, wrap it cleanly
         if (!text.includes("```html") && !text.includes("```") && (text.includes("<!DOCTYPE") || text.includes("<html") || text.includes("<table") || text.includes("<div"))) {
@@ -1817,7 +2218,17 @@ Baris 2+: Kalimat pengantar, lalu blok kode HTML lengkap dalam markdown \`\`\`ht
           text = `📌 **Subjek Rekomendasi:** \`${inferredSubject}\`\n\n${text}`;
         }
 
-        return res.json({ text });
+        // Deterministic post-processing auto-replacements for date/time and placeholders
+        text = text.replace(/\[\s*(hh|dd|bb)[\/\-](mm|bb)[\/\-](yyyy|tttt)\s*\]/gi, formattedDateTimeNumeric);
+        text = text.replace(/\[\s*(tanggal|waktu|tanggal\s*&\s*waktu|date|datetime)\s*\]/gi, formattedDateTimeNumeric);
+        text = text.replace(/\[\s*(link_pembatalan|url_pembatalan|link_batal)\s*\]/gi, targetActionLink);
+        text = text.replace(/\[\s*(no_referensi|nomor_referensi|ref_id|trx_id|nomor\s*referensi)\s*\]/gi, dynamicRandomRef);
+
+        return res.json({
+          text,
+          usedModel: actualModelUsed || requestedModel || "Groq LPU",
+          requestedModel
+        });
       }
 
       // 5. Dynamic Adaptive Fallback (Only executed if all external AI services are completely unreachable)
@@ -1957,19 +2368,54 @@ Draf ini menggunakan struktur kartu responsif modern dengan palet warna selaras,
   // Serve public assets (including crisp bank logos)
   app.use(express.static(path.join(process.cwd(), "public")));
 
-  // Vite middleware for development or serving static files in production
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
+  // Serve built static assets in production or mount Vite middleware in development
+  const distPath = path.join(process.cwd(), "dist");
+  const distIndexExists = fs.existsSync(path.join(distPath, "index.html"));
+  const isProduction =
+    process.env.NODE_ENV === "production" ||
+    Boolean(process.env.K_SERVICE) ||
+    Boolean(process.env.K_REVISION) ||
+    Boolean(process.env.GAE_SERVICE) ||
+    (distIndexExists && (process.env.npm_lifecycle_event === "start" || !process.env.VITE_DEV_SERVER));
+
+  if (isProduction || distIndexExists) {
+    if (distIndexExists) {
+      app.use(express.static(distPath));
+      app.get("*", (req, res) => {
+        if (req.path.startsWith("/api")) {
+          return res.status(404).json({ error: "API route not found" });
+        }
+        res.sendFile(path.join(distPath, "index.html"));
+      });
+    } else {
+      console.warn("Production environment detected, dist/index.html not found. Serving startup response.");
+      app.get("*", (req, res) => {
+        if (req.path.startsWith("/api")) {
+          return res.status(404).json({ error: "API route not found" });
+        }
+        res.status(200).send("<!DOCTYPE html><html><head><title>G-Swift Relay</title></head><body><h3>G-Swift Relay is starting up...</h3></body></html>");
+      });
+    }
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
+    try {
+      const { createServer: createViteServer } = await import("vite");
+      const vite = await createViteServer({
+        server: { middlewareMode: true, hmr: false },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } catch (viteErr) {
+      console.error("Failed to initialize Vite development server middleware:", viteErr);
+      if (distIndexExists) {
+        app.use(express.static(distPath));
+        app.get("*", (req, res) => {
+          if (req.path.startsWith("/api")) {
+            return res.status(404).json({ error: "API route not found" });
+          }
+          res.sendFile(path.join(distPath, "index.html"));
+        });
+      }
+    }
   }
 
   app.listen(PORT, "0.0.0.0", () => {

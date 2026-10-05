@@ -3,7 +3,16 @@ import { motion, AnimatePresence } from "framer-motion";
 import RichTextEditor from "./components/RichTextEditor";
 import ClaudeLogo from "./components/ClaudeLogo";
 import { executeWorkerTask } from "./workers/htmlWorkerBridge";
-import { injectOrUpdateBankLogo, detectBankKey, detectScenarioKey, OFFICIAL_BANK_CONFIGS, BankConfig } from "./utils/bankDetector";
+import {
+  injectOrUpdateBankLogo,
+  detectBankKey,
+  detectScenarioKey,
+  OFFICIAL_BANK_CONFIGS,
+  BankConfig,
+  isDarkOrBrandBackground,
+  applyFreshBankTemplate,
+  generateUniqueBankReference
+} from "./utils/bankDetector";
 import {
   Send,
   FileText,
@@ -56,10 +65,12 @@ import {
   Mic,
   ArrowUp,
   ArrowLeft,
+  ArrowRight,
   Landmark,
   Palette,
   Code,
-  Brain
+  Brain,
+  SquarePen
 } from "lucide-react";
 
 // Tailwind className helper
@@ -569,7 +580,7 @@ export default function App() {
   const initialMountRef = useRef(false);
 
   // Chat AI States
-  const [chatMessages, setChatMessages] = useState<Array<{ role: "user" | "model"; text: string }>>(() => {
+  const [chatMessages, setChatMessages] = useState<Array<{ role: "user" | "model"; text: string; modelBadge?: string }>>(() => {
     const saved = localStorage.getItem("chat_messages");
     if (saved) {
       try {
@@ -589,8 +600,6 @@ export default function App() {
   const cancelTypingRef = useRef<(() => void) | null>(null);
   const [selectedBankScenario, setSelectedBankScenario] = useState<"payment" | "transfer" | "refund" | "topup" | "cash_advance">("payment");
   const [selectedBankFilter, setSelectedBankFilter] = useState<string>("BCA");
-  const [selectedModel, setSelectedModel] = useState<string>("Pro Mendalam");
-  const [showModelDropdown, setShowModelDropdown] = useState<boolean>(false);
   const [showPlusMenu, setShowPlusMenu] = useState<boolean>(false);
   const [isListening, setIsListening] = useState<boolean>(false);
   const [customCancelLink, setCustomCancelLink] = useState(() => {
@@ -608,13 +617,30 @@ export default function App() {
     return localStorage.getItem("custom_data_rules") || "";
   });
 
-  // Handler to apply selected bank template branding (logo + official colors) to draft
-  const handleApplyBankTemplate = useCallback((bankKey: string) => {
+  // Handler to apply selected bank template branding with AUTOMATIC CACHE PURGE
+  const handleApplyBankTemplate = useCallback((bankKey: string, forceFreshNewDraft: boolean = false) => {
     const bank = OFFICIAL_BANK_CONFIGS[bankKey];
     if (!bank) return;
 
+    // 1. Purge session cache & lingering style references
+    try {
+      sessionStorage.removeItem("gswift_cached_bank_style");
+      sessionStorage.removeItem("gswift_last_bank_key");
+      sessionStorage.setItem("gswift_active_bank", bankKey);
+      sessionStorage.setItem("gswift_bank_purged_at", Date.now().toString());
+    } catch {
+      // safe fallback
+    }
+
+    let generatedRef = "";
     setMailForm(prev => {
-      const updatedHtml = injectOrUpdateBankLogo(prev.message || "", bankKey);
+      const baseHtml = forceFreshNewDraft ? "" : (prev.message || "");
+      const result = applyFreshBankTemplate(baseHtml, bankKey, {
+        customCancelLink: customCancelLink.trim(),
+        generateNewRef: true
+      });
+      generatedRef = result.newReference;
+
       let updatedSubject = prev.subject;
       if (
         !updatedSubject ||
@@ -626,18 +652,28 @@ export default function App() {
         updatedSubject.includes("UOB") ||
         updatedSubject === "Notifikasi Transaksi Kartu Kredit"
       ) {
-        updatedSubject = `[Notifikasi Resmi] Konfirmasi Transaksi - ${bank.name}`;
+        updatedSubject = `[Notifikasi Resmi] Konfirmasi Transaksi - ${bank.name} (${generatedRef})`;
+      } else {
+        // Cleanly replace any previous bank name in subject
+        updatedSubject = updatedSubject.replace(/\b(BCA|Mandiri|BRI|BNI|CIMB|UOB)\b/gi, bank.name);
       }
+
       return {
         ...prev,
         subject: updatedSubject,
-        message: updatedHtml
+        message: result.html
       };
     });
 
-    addLog("success", `⚡ Smart Bank Template: Logo resmi & aksen warna ${bank.fullName} (${bank.name}) berhasil diterapkan ke draf.`);
+    // Synchronize selected filter
+    setSelectedBankFilter(bank.name);
+
+    addLog(
+      "success",
+      `⚡ Cache Smart Bank Dibersihkan: Logo resmi, palet warna (${bank.primaryColor}), & no. referensi baru [${generatedRef}] untuk ${bank.fullName} (${bank.name}) berhasil diterapkan segar tanpa sisa data lama.`
+    );
     setTab("send");
-  }, [addLog]);
+  }, [addLog, customCancelLink]);
 
   // Web Speech API Voice Recognition Handler for the Microphone button
   const handleToggleSpeechToText = useCallback(() => {
@@ -1400,7 +1436,7 @@ export default function App() {
           }
         });
 
-        // Images
+        // Images - with smart background color adaptation
         doc.querySelectorAll("img").forEach(img => {
           if (img instanceof HTMLElement) {
             img.style.setProperty("-ms-interpolation-mode", "bicubic");
@@ -1408,6 +1444,45 @@ export default function App() {
             if (!img.style.outline) img.style.outline = "none";
             if (!img.style.textDecoration) img.style.textDecoration = "none";
             if (!img.style.display) img.style.display = "inline-block";
+
+            // Detect if image is a bank logo
+            const src = img.getAttribute("src") || "";
+            const alt = img.getAttribute("alt") || "";
+            const isBankLogo = /logo|bank|bca|mandiri|bri|bni|cimb|uob|wikimedia|\/api\/bank-logo|\/bank-logos|data:image\/svg/i.test(src + " " + alt);
+            
+            if (isBankLogo) {
+              const detectedBankKey = detectBankKey(src + " " + alt + " " + htmlContent);
+              const cfg = OFFICIAL_BANK_CONFIGS[detectedBankKey];
+              
+              // Walk up parent hierarchy to detect background color
+              let parentBg = "";
+              let curr: HTMLElement | null = img.parentElement;
+              while (curr && curr !== doc.body && curr !== doc.documentElement) {
+                const bg = curr.style.backgroundColor || curr.style.background || curr.getAttribute("bgcolor");
+                if (bg && bg !== "transparent" && bg !== "inherit" && bg !== "initial" && bg !== "none") {
+                  parentBg = bg.trim();
+                  break;
+                }
+                curr = curr.parentElement;
+              }
+
+              const isDark = isDarkOrBrandBackground(parentBg, cfg?.primaryColor);
+              if (isDark) {
+                // Background is dark or matches bank brand -> white logo
+                if (cfg?.whiteLogoUrl) {
+                  img.setAttribute("src", cfg.whiteLogoUrl);
+                }
+                img.style.setProperty("filter", "brightness(0) invert(1)");
+                img.style.setProperty("-webkit-filter", "brightness(0) invert(1)");
+              } else {
+                // Background is white or light -> original logo colors
+                if (cfg?.logoUrl && src.includes("-white")) {
+                  img.setAttribute("src", cfg.logoUrl);
+                }
+                img.style.removeProperty("filter");
+                img.style.removeProperty("-webkit-filter");
+              }
+            }
           }
         });
 
@@ -1805,13 +1880,15 @@ export default function App() {
           cancelLink: customCancelLink.trim(),
           scenario: effectiveScenario,
           bankKey: effectiveBankKey,
-          customDataRules: customDataRules.trim()
+          customDataRules: customDataRules.trim(),
+          model: "Claude Mythos"
         })
       });
 
       const data = await response.json();
       if (response.ok && data.text) {
         let aiText = data.text;
+        const usedModelBadge = "Claude Mythos";
 
         // Automatically offload heavy HTML parsing & reference randomization to web-worker
         let initialParsed: { text: string; html: string; subject: string };
@@ -1848,8 +1925,8 @@ export default function App() {
         setChatLoading(false);
         setIsTypingAI(true);
 
-        // Append initial empty message for Claude Mythos response
-        setChatMessages(prev => [...prev, { role: "model", text: "" }]);
+        // Append initial empty message with active model badge
+        setChatMessages(prev => [...prev, { role: "model", text: "", modelBadge: usedModelBadge }]);
 
         // Setup cancellation / skip token
         let isCancelled = false;
@@ -1868,7 +1945,7 @@ export default function App() {
             setChatMessages(prev => {
               const updated = [...prev];
               if (updated.length > 0) {
-                updated[updated.length - 1] = { role: "model", text: aiText };
+                updated[updated.length - 1] = { role: "model", text: aiText, modelBadge: usedModelBadge };
               }
               return updated;
             });
@@ -1897,7 +1974,7 @@ export default function App() {
           setChatMessages(prev => {
             const updated = [...prev];
             if (updated.length > 0) {
-              updated[updated.length - 1] = { role: "model", text: currentPartial };
+              updated[updated.length - 1] = { role: "model", text: currentPartial, modelBadge: usedModelBadge };
             }
             return updated;
           });
@@ -2159,7 +2236,7 @@ export default function App() {
   }, [autoDetectSmtp]);
 
   // SMTP Diagnostic State & Troubleshooting Guide Engine
-  const [diagnosticExpanded, setDiagnosticExpanded] = useState<boolean>(true);
+  const [diagnosticExpanded, setDiagnosticExpanded] = useState<boolean>(false);
   const [copiedDiagnostic, setCopiedDiagnostic] = useState<boolean>(false);
   const [isDiagnosticScanning, setIsDiagnosticScanning] = useState<boolean>(false);
 
@@ -3516,6 +3593,17 @@ export default function App() {
                           transition={{ duration: 0.24, ease: [0.25, 1, 0.5, 1] }}
                           className="overflow-hidden"
                         >
+                          {/* Auto-Purge Cache Indicator Badge */}
+                          <div className="mx-0.5 mb-2 px-2 py-1.5 bg-cyan-950/40 border border-cyan-800/40 rounded-lg flex items-center justify-between gap-1 text-[8.5px]">
+                            <div className="flex items-center gap-1.5 text-cyan-300 min-w-0">
+                              <Sparkles className="w-3 h-3 text-cyan-400 shrink-0" />
+                              <span className="truncate font-medium">Auto-Purge Cache</span>
+                            </div>
+                            <span className="text-[8px] bg-cyan-900/80 text-cyan-200 px-1 py-0.2 rounded font-mono font-bold shrink-0">
+                              Aktif (100% Segar)
+                            </span>
+                          </div>
+
                           <div className="space-y-1.5 pt-0.5">
                             {Object.values(OFFICIAL_BANK_CONFIGS).map((bank) => {
                               const isCurrentBank = detectBankKey(`${mailForm.subject} ${mailForm.message}`) === bank.key;
@@ -3921,7 +4009,7 @@ export default function App() {
 
             {/* Main Header Bar - Display Only Logo (Claude Mythos) and Connection Indicator */}
             {tab !== "ai" && (
-              <header className="h-14 bg-white border-b border-slate-100 px-3.5 sm:px-5 flex items-center justify-between shrink-0 shadow-xs z-30 relative gap-2">
+              <header className="h-13 sm:h-14 bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-3.5 sm:px-5 flex items-center justify-between shrink-0 shadow-xs z-30 sticky top-0 relative gap-2">
                 {/* Brand Logo & Name (Display Only) */}
                 <div className="flex items-center gap-2.5 min-w-0 select-none">
                   {/* Authentic Claude Logo Icon */}
@@ -3963,7 +4051,7 @@ export default function App() {
                       smtpStatus.status === "checking" &&
                         "bg-amber-50 text-amber-800 border-amber-300",
                       smtpStatus.status === "unconfigured" &&
-                        "bg-slate-100 text-slate-600 border-slate-300 hover:bg-slate-200/80"
+                        "bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200/80"
                     )}
                   >
                     {smtpStatus.status === "connected" ? (
@@ -3975,8 +4063,8 @@ export default function App() {
                         <span className="hidden sm:inline uppercase tracking-tight font-black text-[9.5px]">
                           SMTP Online
                         </span>
-                        <span className="sm:hidden uppercase tracking-tight font-black text-[9.5px]">
-                          ON
+                        <span className="sm:hidden font-bold text-[10px]">
+                          Online
                         </span>
                       </>
                     ) : smtpStatus.status === "disconnected" ? (
@@ -3987,14 +4075,14 @@ export default function App() {
                         <span className="hidden sm:inline uppercase tracking-tight font-black text-[9.5px]">
                           SMTP Offline
                         </span>
-                        <span className="sm:hidden uppercase tracking-tight font-black text-[9.5px]">
-                          OFF
+                        <span className="sm:hidden font-bold text-[10px]">
+                          Offline
                         </span>
                       </>
                     ) : smtpStatus.status === "checking" ? (
                       <>
                         <RefreshCw className="w-2.5 h-2.5 animate-spin text-amber-600" />
-                        <span className="uppercase tracking-tight font-black text-[9.5px]">
+                        <span className="font-bold text-[10px]">
                           Cek...
                         </span>
                       </>
@@ -4002,10 +4090,10 @@ export default function App() {
                       <>
                         <span className="relative inline-flex rounded-full h-2 w-2 bg-slate-400" />
                         <span className="hidden sm:inline uppercase tracking-tight font-black text-[9.5px]">
-                          SMTP Unset
+                          Atur SMTP
                         </span>
-                        <span className="sm:hidden uppercase tracking-tight font-black text-[9.5px]">
-                          Unset
+                        <span className="sm:hidden font-bold text-[10px]">
+                          Atur SMTP
                         </span>
                       </>
                     )}
@@ -4025,7 +4113,7 @@ export default function App() {
                     animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
                     exit={{ opacity: 0, y: -8, filter: "blur(2px)" }}
                     transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-                    className="p-3 sm:p-5 max-w-4xl mx-auto flex flex-col gap-3 min-h-full justify-start w-[95%] sm:w-full mobile-card-container"
+                    className="p-3 sm:p-5 max-w-4xl mx-auto flex flex-col gap-3 min-h-full justify-start w-[95%] sm:w-full mobile-card-container pb-28 sm:pb-12"
                   >
                     <div className="space-y-3 w-full">
                       <div className="bg-white rounded-2xl border border-white shadow-[0_25px_60px_rgba(0,58,143,0.25)] overflow-hidden ring-1 ring-mandiri-blue-100/50">
@@ -4809,86 +4897,102 @@ export default function App() {
                 )}
 
                 {/* 2.3 Tab Terminal */}
+                {/* 2.3.4 Tab Terminal - Ultra-Clean, Modern Minimalist Console */}
                 {tab === "terminal" && (
                   <motion.div
                     key="terminal-tab"
-                    initial={{ opacity: 0, y: 12, filter: "blur(4px)" }}
+                    initial={{ opacity: 0, y: 10, filter: "blur(3px)" }}
                     animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-                    exit={{ opacity: 0, y: -8, filter: "blur(2px)" }}
-                    transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-                    className="p-3 sm:p-4 max-w-2xl mx-auto h-full flex flex-col gap-3.5 w-[96%] sm:w-full overflow-y-auto no-scrollbar pb-24 mobile-card-container"
+                    exit={{ opacity: 0, y: -6, filter: "blur(2px)" }}
+                    transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+                    className="p-3 sm:p-5 max-w-3xl mx-auto h-full flex flex-col w-[96%] sm:w-full overflow-hidden pb-28 sm:pb-12 mobile-card-container"
                   >
-                    {/* PANEL DIAGNOSTIK & PANDUAN PERBAIKAN SMTP (Troubleshooting Guide) */}
-                    <div className="bg-[#0b1329] rounded-[24px] border border-slate-800 shadow-2xl overflow-hidden transition-all duration-200">
-                      {/* Diagnostic Header */}
-                      <div className="p-3.5 sm:p-4 border-b border-slate-800/80 bg-slate-900/90 flex flex-wrap items-center justify-between gap-2.5">
+                    {/* Unified Sleek Terminal Window */}
+                    <div className="bg-[#070b14] rounded-2xl sm:rounded-3xl border border-slate-800/90 shadow-2xl flex flex-col flex-1 min-h-[460px] overflow-hidden">
+                      {/* Clean Window Top Bar */}
+                      <div className="px-3.5 sm:px-4 py-2.5 sm:py-3 bg-[#0c1220] border-b border-slate-800/80 flex items-center justify-between gap-2.5">
+                        {/* Left: Window Dots & Title */}
                         <div className="flex items-center gap-2.5 min-w-0">
-                          <div className={cn(
-                            "w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border",
-                            smtpDiagnostic.severity === "healthy" && "bg-emerald-500/10 text-emerald-400 border-emerald-500/30",
-                            smtpDiagnostic.severity === "error" && "bg-rose-500/10 text-rose-400 border-rose-500/30",
-                            smtpDiagnostic.severity === "warning" && "bg-amber-500/10 text-amber-400 border-amber-500/30",
-                            smtpDiagnostic.severity === "unconfigured" && "bg-slate-800 text-slate-400 border-slate-700"
-                          )}>
-                            {smtpDiagnostic.severity === "healthy" ? (
-                              <ShieldCheck className="w-4 h-4" />
-                            ) : smtpDiagnostic.severity === "error" ? (
-                              <ShieldAlert className="w-4 h-4" />
-                            ) : smtpDiagnostic.severity === "warning" ? (
-                              <TriangleAlert className="w-4 h-4" />
-                            ) : (
-                              <Wrench className="w-4 h-4" />
-                            )}
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className="w-2.5 h-2.5 rounded-full bg-rose-500/80" />
+                            <span className="w-2.5 h-2.5 rounded-full bg-amber-500/80" />
+                            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500/80" />
                           </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <h2 className="text-[11px] font-black text-slate-200 tracking-wider uppercase">
-                                DIAGNOSTIK RELAY SMTP
-                              </h2>
-                              <span className={cn(
-                                "px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-tight border",
-                                smtpDiagnostic.badgeColor
-                              )}>
-                                {smtpDiagnostic.badge}
-                              </span>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-[12px] font-bold text-slate-200 tracking-wide font-mono truncate">
+                              relay.log
+                            </span>
+                            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-slate-900 border border-slate-800 text-[9px] shrink-0">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                              <span className="text-slate-300 font-medium uppercase tracking-wider">Live</span>
                             </div>
-                            <p className="text-[10px] text-slate-400 truncate mt-0.5">
-                              {smtpDiagnostic.category} • Pemindai otomatis & panduan solusi
-                            </p>
                           </div>
                         </div>
 
-                        {/* Quick Controls */}
-                        <div className="flex items-center gap-1.5 ml-auto">
+                        {/* Right: Quick Action Toolbar */}
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {/* Diagnostic Dropdown Button */}
                           <button
-                            onClick={handleRunDiagnosticScan}
-                            disabled={isDiagnosticScanning}
-                            className="px-2.5 py-1.5 bg-mandiri-blue-600 hover:bg-mandiri-blue-500 disabled:opacity-50 text-white rounded-lg text-[10px] font-bold flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
-                            title="Pindai ulang koneksi SMTP sekarang"
+                            type="button"
+                            onClick={() => setDiagnosticExpanded(!diagnosticExpanded)}
+                            className={cn(
+                              "px-2 sm:px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1.5 border transition-all cursor-pointer",
+                              diagnosticExpanded
+                                ? "bg-cyan-950/80 text-cyan-300 border-cyan-700/80 shadow-xs"
+                                : "bg-slate-800/80 text-slate-300 border-slate-700/80 hover:bg-slate-700/80"
+                            )}
+                            title="Tampilkan info diagnostik"
                           >
-                            <RefreshCw className={cn("w-3 h-3", isDiagnosticScanning && "animate-spin")} />
-                            <span>{isDiagnosticScanning ? "Memindai..." : "Pindai Ulang"}</span>
+                            <span className={cn(
+                              "w-1.5 h-1.5 rounded-full shrink-0",
+                              smtpDiagnostic.severity === "healthy" ? "bg-emerald-400" :
+                              smtpDiagnostic.severity === "error" ? "bg-rose-400" :
+                              smtpDiagnostic.severity === "warning" ? "bg-amber-400" : "bg-slate-400"
+                            )} />
+                            <span className="hidden xs:inline">Diagnostik</span>
+                            <ChevronDown className={cn("w-3 h-3 transition-transform duration-200 text-slate-400", diagnosticExpanded && "rotate-180")} />
                           </button>
 
+                          {/* Scan/Refresh Button */}
                           <button
-                            onClick={handleCopyDiagnostic}
-                            className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition-all cursor-pointer"
-                            title="Salin hasil diagnosa"
+                            type="button"
+                            onClick={handleRunDiagnosticScan}
+                            disabled={isDiagnosticScanning}
+                            className="p-1.5 sm:px-2 sm:py-1 bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 hover:text-white rounded-lg border border-slate-700/80 text-[10px] font-medium flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                            title="Pindai koneksi SMTP"
+                          >
+                            <RefreshCw className={cn("w-3 h-3", isDiagnosticScanning && "animate-spin text-cyan-400")} />
+                            <span className="hidden sm:inline">{isDiagnosticScanning ? "Memindai..." : "Pindai"}</span>
+                          </button>
+
+                          {/* Copy All Logs */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const allLogsText = logs.map(l => `[${l.timestamp}] ${l.message}`).join("\n");
+                              navigator.clipboard.writeText(allLogsText);
+                              setCopiedDiagnostic(true);
+                              setTimeout(() => setCopiedDiagnostic(false), 1800);
+                            }}
+                            className="p-1.5 bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 hover:text-white rounded-lg border border-slate-700/80 transition-all cursor-pointer"
+                            title="Salin seluruh log"
                           >
                             {copiedDiagnostic ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                           </button>
 
+                          {/* Clear Logs Button */}
                           <button
-                            onClick={() => setDiagnosticExpanded(!diagnosticExpanded)}
-                            className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition-all cursor-pointer"
-                            title={diagnosticExpanded ? "Sembunyikan panduan" : "Tampilkan panduan"}
+                            type="button"
+                            onClick={() => setLogs([])}
+                            className="p-1.5 bg-slate-800/80 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 rounded-lg border border-slate-700/80 transition-all cursor-pointer"
+                            title="Bersihkan log console"
                           >
-                            {diagnosticExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                            <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       </div>
 
-                      {/* Diagnostic Content Body */}
+                      {/* Optional Expandable Diagnostic Tray (Compact & Clean) */}
                       <AnimatePresence>
                         {diagnosticExpanded && (
                           <motion.div
@@ -4896,171 +5000,96 @@ export default function App() {
                             animate={{ height: "auto", opacity: 1 }}
                             exit={{ height: 0, opacity: 0 }}
                             transition={{ duration: 0.2 }}
-                            className="p-3.5 sm:p-4 space-y-3 border-b border-slate-800/60"
+                            className="border-b border-slate-800/90 bg-[#0a101f] px-4 py-3 space-y-2.5 overflow-hidden"
                           >
-                            {/* Diagnosis Summary Card */}
-                            <div className={cn(
-                              "p-3 rounded-xl border text-xs",
-                              smtpDiagnostic.severity === "healthy" && "bg-emerald-950/20 border-emerald-800/40 text-emerald-200",
-                              smtpDiagnostic.severity === "error" && "bg-rose-950/25 border-rose-800/40 text-rose-200",
-                              smtpDiagnostic.severity === "warning" && "bg-amber-950/25 border-amber-800/40 text-amber-200",
-                              smtpDiagnostic.severity === "unconfigured" && "bg-slate-900 border-slate-800 text-slate-300"
-                            )}>
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="space-y-1">
-                                  <div className="font-bold text-[12px] flex items-center gap-1.5">
-                                    <span>{smtpDiagnostic.title}</span>
-                                  </div>
-                                  <p className="text-[11px] leading-relaxed text-slate-300/90">
-                                    <strong className="text-slate-200">Akar Masalah:</strong> {smtpDiagnostic.rootCause}
-                                  </p>
-                                </div>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className={cn(
+                                  "px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border font-mono shrink-0",
+                                  smtpDiagnostic.badgeColor
+                                )}>
+                                  {smtpDiagnostic.badge}
+                                </span>
+                                <span className="text-[11px] font-bold text-slate-200 truncate">
+                                  {smtpDiagnostic.title}
+                                </span>
                               </div>
+                              <button
+                                type="button"
+                                onClick={() => setTab("accounts")}
+                                className="text-[10px] text-cyan-400 hover:text-cyan-300 font-bold underline underline-offset-2 cursor-pointer shrink-0"
+                              >
+                                Konfigurasi Akun &rarr;
+                              </button>
+                            </div>
 
-                              {/* Raw error snippet if available */}
+                            <div className="text-[10.5px] text-slate-300/90 leading-relaxed bg-black/40 p-2.5 rounded-xl border border-slate-800/80 space-y-1">
+                              <p>
+                                <span className="text-slate-400 font-medium">Akar Masalah:</span>{" "}
+                                <span className="text-slate-200">{smtpDiagnostic.rootCause}</span>
+                              </p>
                               {smtpDiagnostic.rawError && (
-                                <div className="mt-2.5 pt-2 border-t border-slate-800/60 flex items-center justify-between gap-2 bg-black/40 rounded-lg px-2.5 py-1.5 font-mono text-[10px] text-rose-300 break-all">
-                                  <span className="truncate">{smtpDiagnostic.rawError}</span>
-                                  <button
-                                    onClick={() => {
-                                      navigator.clipboard.writeText(smtpDiagnostic.rawError || "");
-                                      setCopiedDiagnostic(true);
-                                      setTimeout(() => setCopiedDiagnostic(false), 2000);
-                                    }}
-                                    className="shrink-0 p-1 hover:text-white transition-colors"
-                                    title="Salin pesan error"
-                                  >
-                                    <Copy className="w-3 h-3" />
-                                  </button>
-                                </div>
+                                <p className="font-mono text-[9.5px] text-rose-300 pt-1 border-t border-slate-800/80 break-all">
+                                  {smtpDiagnostic.rawError}
+                                </p>
                               )}
                             </div>
 
-                            {/* Step-by-Step Troubleshooting Guide */}
-                            <div className="space-y-2">
-                              <div className="flex items-center justify-between">
-                                <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                                  <HelpCircle className="w-3 h-3 text-cyan-400" />
-                                  Panduan Perbaikan Langkah Demi Langkah
-                                </span>
-                                <span className="text-[9px] text-slate-500 font-semibold">
-                                  {smtpDiagnostic.steps.length} Langkah
-                                </span>
-                              </div>
-
-                              <div className="grid gap-2">
-                                {smtpDiagnostic.steps.map((step) => (
-                                  <div
-                                    key={step.num}
-                                    className="bg-slate-900/80 border border-slate-800/80 rounded-xl p-2.5 flex items-start gap-2.5 hover:border-slate-700/80 transition-all"
-                                  >
-                                    <div className="w-5 h-5 rounded-full bg-slate-800 text-cyan-300 flex items-center justify-center shrink-0 font-bold text-[10px] mt-0.5 border border-slate-700">
-                                      {step.num}
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                      <div className="text-[11px] font-bold text-slate-200">
-                                        {step.title}
-                                      </div>
-                                      <p className="text-[10.5px] text-slate-400 leading-normal mt-0.5">
-                                        {step.desc}
-                                      </p>
-                                    </div>
-                                    {step.actionType === "accounts" && (
-                                      <button
-                                        onClick={() => setTab("accounts")}
-                                        className="shrink-0 px-2 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-300 hover:text-cyan-200 border border-slate-700 rounded-lg text-[9.5px] font-bold transition-all cursor-pointer"
-                                      >
-                                        Buka Akun
-                                      </button>
-                                    )}
-                                    {step.actionType === "test" && (
-                                      <button
-                                        onClick={handleRunDiagnosticScan}
-                                        disabled={isDiagnosticScanning}
-                                        className="shrink-0 px-2 py-1 bg-mandiri-blue-600/80 hover:bg-mandiri-blue-500 text-white rounded-lg text-[9.5px] font-bold transition-all cursor-pointer"
-                                      >
-                                        Uji Ulang
-                                      </button>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-
-                            {/* Helpful Tip & Direct Links */}
-                            <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[10px] text-slate-400">
-                              <span className="flex items-center gap-1.5">
-                                <Info className="w-3 h-3 text-mandiri-blue-400" />
-                                Host aktif: <code className="text-slate-200 font-mono">{smtpConfig?.host || "Belum ada"}</code> ({smtpConfig?.port || "587"})
+                            <div className="flex items-center justify-between text-[9.5px] text-slate-400">
+                              <span>
+                                Host: <code className="text-slate-200 font-mono">{smtpConfig?.host || "Belum ada"}</code> : <code className="text-slate-200 font-mono">{smtpConfig?.port || "465"}</code>
                               </span>
-                              <div className="flex items-center gap-2">
-                                <button
-                                  onClick={() => setTab("accounts")}
-                                  className="text-cyan-400 hover:text-cyan-300 font-bold underline underline-offset-2 cursor-pointer flex items-center gap-1"
-                                >
-                                  Kelola Akun SMTP &rarr;
-                                </button>
-                              </div>
+                              <span>{smtpDiagnostic.category}</span>
                             </div>
                           </motion.div>
                         )}
                       </AnimatePresence>
-                    </div>
 
-                    {/* LIVE STREAM RELAY CONSOLE */}
-                    <div className="bg-[#020617] rounded-[24px] border border-slate-800 shadow-2xl flex flex-col h-[40vh] sm:h-[45vh] min-h-[250px] overflow-hidden">
-                      <div className="p-3.5 sm:p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900">
-                        <div className="flex flex-col">
-                          <h2 className="text-[10px] font-extrabold text-slate-300 uppercase tracking-widest flex items-center gap-2">
-                            RELAY CONSOLE
-                          </h2>
-                          <div className="flex items-center gap-1.5 mt-0.5">
-                            <div className="w-1.5 h-1.5 bg-mandiri-blue-500 rounded-full animate-pulse" />
-                            <span className="text-[9px] text-mandiri-blue-400 font-bold uppercase">Streaming live</span>
+                      {/* Log Terminal Console Body */}
+                      <div className="p-4 flex-1 overflow-y-auto space-y-1.5 font-mono text-[11px] leading-relaxed no-scrollbar bg-[#050811]">
+                        {logs.length === 0 ? (
+                          <div className="flex flex-col items-center justify-center h-full min-h-[240px] text-slate-600 gap-2 select-none">
+                            <Terminal className="w-7 h-7 opacity-20" />
+                            <p className="text-[11px] text-slate-500 font-mono">Menunggu aktivitas relay...</p>
                           </div>
-                        </div>
-                        <button
-                          onClick={() => setLogs([])}
-                          className="p-2.5 bg-slate-800 hover:bg-red-500/10 rounded-xl text-slate-400 hover:text-red-400 transition-all cursor-pointer"
-                          title="Bersihkan log terminal"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-
-                      {/* Log Terminal List */}
-                      <div className="p-4 flex-1 overflow-y-auto space-y-1 font-mono text-[11px] no-scrollbar">
-                        {logs.length === 0 && (
-                          <div className="flex flex-col items-center justify-center h-full text-slate-600 gap-3">
-                            <Terminal className="w-8 h-8 opacity-20" />
-                            <p className="italic text-xs font-semibold">Console idle...</p>
-                          </div>
+                        ) : (
+                          logs.map((log, idx) => (
+                            <div key={idx} className="flex items-start gap-2.5 font-mono">
+                              <span className="text-slate-500 select-none shrink-0 font-medium">
+                                [{log.timestamp}]
+                              </span>
+                              <span
+                                className={cn(
+                                  "break-words select-text",
+                                  log.type === "error" && "text-rose-400 font-semibold",
+                                  log.type === "success" && "text-emerald-400 font-semibold",
+                                  log.type === "warning" && "text-amber-400 font-semibold",
+                                  log.type === "info" && "text-slate-200",
+                                  !log.type && "text-slate-300"
+                                )}
+                              >
+                                {log.type === "success" && "✓ "}
+                                {log.type === "error" && "✕ "}
+                                {log.type === "warning" && "⚠ "}
+                                {log.message}
+                              </span>
+                            </div>
+                          ))
                         )}
-                        {logs.map((log, idx) => (
-                          <div key={idx} className="flex gap-2.5 items-start">
-                            <span className="text-slate-500 shrink-0 select-none font-bold">[{log.timestamp}]</span>
-                            <span
-                              className={cn(
-                                "leading-relaxed break-words",
-                                log.type === "error" && "text-red-400 font-bold",
-                                log.type === "success" && "text-emerald-400 font-bold",
-                                log.type === "warning" && "text-amber-400 font-bold animate-pulse",
-                                log.type === "info" && "text-slate-200",
-                                !log.type && "text-slate-400"
-                              )}
-                            >
-                              {log.message}
-                            </span>
-                          </div>
-                        ))}
                         <div ref={terminalEndRef} />
                       </div>
 
-                      <div className="p-3.5 sm:p-4 bg-slate-950 border-t border-slate-800 flex justify-between items-center px-4">
-                        <span className="text-[10px] text-slate-500 font-bold uppercase tracking-tight">Log Count: {logs.length}/50</span>
+                      {/* Clean Minimalist Bottom Bar */}
+                      <div className="px-4 py-2.5 bg-[#0a0f1b] border-t border-slate-800/80 flex items-center justify-between text-[10px] font-mono text-slate-400">
                         <div className="flex items-center gap-2">
-                          <span className="w-2 h-2 bg-mandiri-blue-500 rounded-full shadow-[0_0_8px_rgba(0,80,179,0.6)]" />
-                          <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">GF-V104</span>
+                          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+                          <span>Log: {logs.length} entri</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-slate-500">SMTP:</span>
+                          <span className="text-slate-300 font-medium">
+                            {smtpConfig?.host ? `${smtpConfig.host}:${smtpConfig.port || 465}` : "Belum terkonfigurasi"}
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -5224,6 +5253,24 @@ export default function App() {
                               </p>
                             </div>
 
+                            {/* Integrated Link Tombol Batal input inside Aturan Data */}
+                            <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                              <label className="text-[10.5px] font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                                <LinkIcon className="w-3.5 h-3.5 text-mandiri-blue-600" />
+                                <span>Link URL Tombol Batalkan Transaksi:</span>
+                              </label>
+                              <input
+                                type="url"
+                                value={customCancelLink}
+                                onChange={e => {
+                                  setCustomCancelLink(e.target.value);
+                                  localStorage.setItem("custom_cancel_link", e.target.value);
+                                }}
+                                placeholder="https://contoh-link-anda.com/batal (Kosongkan untuk default bank)"
+                                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:bg-white transition-all font-mono"
+                              />
+                            </div>
+
                             <div className="flex items-center justify-between pt-3 border-t border-slate-100">
                               {customDataRules.trim() ? (
                                 <button
@@ -5255,92 +5302,63 @@ export default function App() {
                       )}
                     </AnimatePresence>
 
-                    {/* Top Navigation Bar: Back Arrow "←", "Pro Mendalam ⌵", New Chat, Avatar */}
-                    <header className="px-5 pt-4 pb-2 flex items-center justify-between z-30 shrink-0 w-full max-w-4xl mx-auto">
-                      {/* Left: Back Arrow (←) */}
+                    {/* Top Navigation Bar: Clean, minimal, icon-only */}
+                    <header className="px-4 sm:px-6 pt-3 pb-2 flex items-center justify-between z-30 shrink-0 w-full max-w-3xl mx-auto">
+                      {/* Left: Back Arrow (←) - pure icon */}
                       <button
                         type="button"
                         onClick={() => setTab("send")}
-                        className="w-10 h-10 -ml-2 rounded-full hover:bg-black/5 active:scale-95 transition-all cursor-pointer flex items-center justify-center text-[#141413]"
+                        className="p-1.5 -ml-1.5 text-[#141413] hover:text-slate-600 active:scale-90 transition-all cursor-pointer flex items-center justify-center"
                         title="Kembali ke Pengiriman"
                       >
                         <ArrowLeft className="w-5 h-5 stroke-[2.2]" />
                       </button>
 
-                      {/* Center: Model Selector Dropdown ("Pro Mendalam ⌵") */}
-                      <div className="relative">
-                        <button
-                          type="button"
-                          onClick={() => setShowModelDropdown(prev => !prev)}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full hover:bg-black/5 active:scale-98 transition-all cursor-pointer select-none"
-                        >
-                          <span className="text-[17px] sm:text-[18px] font-semibold text-[#141413] tracking-tight">
-                            {selectedModel}
-                          </span>
-                          <ChevronDown className="w-4 h-4 text-[#52525b] stroke-[2.5]" />
-                        </button>
-
-                        <AnimatePresence>
-                          {showModelDropdown && (
-                            <motion.div
-                              initial={{ opacity: 0, y: 6, scale: 0.96 }}
-                              animate={{ opacity: 1, y: 0, scale: 1 }}
-                              exit={{ opacity: 0, y: 6, scale: 0.96 }}
-                              className="absolute top-full mt-2 left-1/2 -translate-x-1/2 w-52 bg-white/95 backdrop-blur-xl rounded-2xl p-1.5 border border-slate-200 shadow-xl z-50 space-y-1"
-                            >
-                              {[
-                                { name: "Pro Mendalam", desc: "Model penalaran mendalam" },
-                                { name: "Claude 3.7 Sonnet", desc: "Cepat & adaptif" },
-                                { name: "Claude 3.5 Haiku", desc: "Kecepatan maksimal" },
-                              ].map((m) => (
-                                <button
-                                  key={m.name}
-                                  type="button"
-                                  onClick={() => {
-                                    setSelectedModel(m.name);
-                                    setShowModelDropdown(false);
-                                  }}
-                                  className={cn(
-                                    "w-full px-3 py-2 text-left rounded-xl text-xs font-semibold flex flex-col gap-0.5 transition-colors cursor-pointer",
-                                    selectedModel === m.name ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"
-                                  )}
-                                >
-                                  <span className="font-bold">{m.name}</span>
-                                  <span className="text-[10px] text-slate-400 font-normal">{m.desc}</span>
-                                </button>
-                              ))}
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
-                      </div>
-
-                      {/* Right: New Chat (Pencil in Dotted Circle) & Minimalist Human Brain Icon for Custom Data Rules */}
-                      <div className="flex items-center gap-2 sm:gap-3">
+                      {/* Right: Pure Icons Only (New Chat, Link Tombol, Aturan Data) */}
+                      <div className="flex items-center gap-3 sm:gap-4">
+                        {/* New Chat - pure icon */}
                         <button
                           type="button"
                           onClick={handleClearChat}
-                          className="w-10 h-10 rounded-full hover:bg-black/5 active:scale-95 transition-all cursor-pointer flex items-center justify-center text-[#141413]"
+                          className="p-1 text-[#141413] hover:text-slate-600 active:scale-90 transition-all cursor-pointer flex items-center justify-center"
                           title="Percakapan Baru"
                         >
-                          <svg viewBox="0 0 24 24" className="w-[23px] h-[23px]" fill="none" stroke="currentColor">
-                            <circle cx="12" cy="12" r="9.5" strokeWidth="1.5" strokeDasharray="2.5 2.5" strokeLinecap="round" />
-                            <path d="M14.8 6.8l2.4 2.4-7.6 7.6H7.2v-2.4l7.6-7.6z" strokeWidth="1.5" strokeLinejoin="round" />
-                          </svg>
+                          <SquarePen className="w-5 h-5 stroke-[2]" />
                         </button>
+
+                        {/* Link Tombol - pure icon */}
+                        <button
+                          type="button"
+                          onClick={() => setShowCancelLinkSettings(true)}
+                          className={cn(
+                            "p-1 transition-all cursor-pointer relative active:scale-90 flex items-center justify-center",
+                            customCancelLink.trim()
+                              ? "text-sky-600 hover:text-sky-700"
+                              : "text-[#141413] hover:text-slate-600"
+                          )}
+                          title={customCancelLink.trim() ? `Link Tombol Batal: ${customCancelLink}` : "Atur Link Tombol Batalkan Transaksi"}
+                        >
+                          <LinkIcon className="w-5 h-5 stroke-[2]" />
+                          {customCancelLink.trim() && (
+                            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-sky-600 rounded-full animate-pulse ring-2 ring-[#FAF9F5]" />
+                          )}
+                        </button>
+
+                        {/* Aturan Data - pure icon */}
                         <button
                           type="button"
                           onClick={() => setShowRulesModal(true)}
                           className={cn(
-                            "w-10 h-10 rounded-full border flex items-center justify-center shrink-0 shadow-2xs select-none transition-all cursor-pointer relative group active:scale-95",
+                            "p-1 transition-all cursor-pointer relative active:scale-90 flex items-center justify-center",
                             customDataRules.trim()
-                              ? "bg-indigo-50/90 border-indigo-300 text-indigo-700 hover:bg-indigo-100"
-                              : "bg-[#FAEDE6] border-[#F4DDD2]/80 text-[#CC5A36] hover:bg-[#f6dfd3]"
+                              ? "text-indigo-600 hover:text-indigo-700"
+                              : "text-[#CC5A36] hover:text-[#b54b2b]"
                           )}
                           title="Aturan Data Utama & Format Draf Email"
                         >
-                          <Brain className="w-5 h-5 transition-transform group-hover:scale-110" />
+                          <Brain className="w-5 h-5 stroke-[2]" />
                           {customDataRules.trim() && (
-                            <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-indigo-600 rounded-full ring-2 ring-white animate-pulse" />
+                            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-indigo-600 rounded-full animate-pulse ring-2 ring-[#FAF9F5]" />
                           )}
                         </button>
                       </div>
@@ -5348,12 +5366,12 @@ export default function App() {
 
                     {/* Middle Content Area */}
                     {chatMessages.length === 0 && !chatLoading ? (
-                      /* 1:1 Authentic Greeting Hero Screen with Moving Logo */
-                      <div className="flex-1 flex flex-col items-center justify-center text-center px-4 -mt-10 sm:-mt-14 select-none animate-fadeIn">
-                        {/* Claude Logo (Kombinasi Putaran Halus 360° + Melayang) */}
-                        <div className="mb-5 flex items-center justify-center cursor-pointer select-none">
+                      /* Minimalist, Clean Greeting Hero Screen */
+                      <div className="flex-1 flex flex-col items-center justify-center text-center px-4 max-w-sm mx-auto w-full select-none animate-fadeIn py-8 sm:py-12">
+                        {/* Claude Logo - balanced size */}
+                        <div className="mb-4 flex items-center justify-center">
                           <ClaudeLogo
-                            className="w-28 h-28 sm:w-36 sm:h-36 drop-shadow-md shrink-0"
+                            className="w-16 h-16 sm:w-20 sm:h-20 drop-shadow-sm shrink-0"
                             animated={true}
                             floating={true}
                             speed="normal"
@@ -5362,49 +5380,14 @@ export default function App() {
                         </div>
 
                         {/* Title: Claude Mythos */}
-                        <h1 className="font-serif text-[40px] sm:text-[46px] font-normal tracking-tight text-[#141413] leading-none mb-3 select-none">
+                        <h1 className="font-serif text-[28px] sm:text-[34px] font-normal tracking-tight text-[#141413] leading-tight mb-2 select-none">
                           Claude Mythos
                         </h1>
 
-                        {/* Subtitle: Ada yang bisa saya bantu? */}
-                        <p className="text-[17px] sm:text-[18px] font-normal text-[#64748b] mt-1 leading-relaxed select-none">
-                          Ada yang bisa saya bantu?
+                        {/* Subtitle */}
+                        <p className="text-[15px] sm:text-[16px] text-slate-500 font-normal leading-relaxed select-none">
+                          Ada yang bisa saya bantu buatkan hari ini?
                         </p>
-
-                        {/* Quick Smart Bank Template Chips on Greeting Screen */}
-                        <div className="mt-5 w-full max-w-md mx-auto space-y-2">
-                          <div className="flex items-center justify-center gap-1.5 text-[10.5px] font-black text-slate-500 uppercase tracking-wider">
-                            <Landmark className="w-3.5 h-3.5 text-cyan-600" />
-                            <span>Smart Bank Template (6 Bank)</span>
-                          </div>
-                          <div className="flex flex-wrap items-center justify-center gap-2">
-                            {Object.values(OFFICIAL_BANK_CONFIGS).map((bank) => (
-                              <motion.button
-                                key={bank.key}
-                                type="button"
-                                whileHover={{ scale: 1.05 }}
-                                whileTap={{ scale: 0.95 }}
-                                onClick={() => handleSendChatMessage(undefined, `Rancang draf email resmi Bank ${bank.name} dengan tampilan responsif modern`)}
-                                className="flex items-center gap-2 px-3 py-2 bg-white/95 hover:bg-white rounded-xl border border-slate-200/90 shadow-2xs hover:shadow-xs transition-all cursor-pointer group active:scale-95"
-                                title={`Pilih Template ${bank.fullName || bank.name}`}
-                              >
-                                <div className="h-5 w-12 bg-white rounded px-0.5 flex items-center justify-center shrink-0">
-                                  <img
-                                    src={bank.logoUrl}
-                                    alt={bank.name}
-                                    className="max-h-4.5 max-w-full object-contain"
-                                    loading="lazy"
-                                  />
-                                </div>
-                                <span
-                                  className="w-2 h-2 rounded-full shrink-0 border border-white/60 shadow-2xs"
-                                  style={{ backgroundColor: bank.primaryColor }}
-                                  title={`Aksen: ${bank.primaryColor}`}
-                                />
-                              </motion.button>
-                            ))}
-                          </div>
-                        </div>
                       </div>
                     ) : (
                       /* Scrollable Active Message Stream */
@@ -5431,6 +5414,14 @@ export default function App() {
                                 </div>
                               )}
                               <div className="flex flex-col gap-2 min-w-0 flex-1">
+                                {msg.role !== "user" && !msg.text.startsWith("Error:") && (
+                                  <div className="flex items-center gap-1.5 self-start -mb-0.5">
+                                    <span className="text-[10.5px] font-medium text-slate-600 bg-slate-100/90 border border-slate-200/80 px-2.5 py-0.5 rounded-full flex items-center gap-1.5 shadow-2xs">
+                                      <ClaudeLogo className="w-3 h-3 shrink-0" color="#CC5A36" />
+                                      <span>Dikerjakan oleh Claude Mythos</span>
+                                    </span>
+                                  </div>
+                                )}
                                 {parsed.text ? (
                                   msg.text.startsWith("Error:") ? (
                                     <div className="p-3.5 rounded-2xl text-xs bg-rose-50 border border-rose-200 text-rose-800 rounded-tl-xs shadow-xs space-y-2">
@@ -5715,28 +5706,9 @@ export default function App() {
                               transition={{ duration: 0.2 }}
                               className="absolute bottom-full mb-3 left-0 right-0 bg-white/95 backdrop-blur-xl rounded-3xl p-4 border border-white/80 shadow-[0_12px_40px_rgba(20,50,100,0.16)] space-y-3 z-50"
                             >
-                              <div className="flex items-center justify-between pb-1.5 border-b border-slate-100">
-                                <div className="flex items-center gap-1.5 min-w-0">
-                                  <Landmark className="w-4 h-4 text-cyan-600 shrink-0" />
-                                  <span className="text-[12px] font-black text-slate-800 uppercase tracking-wider truncate">
-                                    Smart Bank Template (1-Klik)
-                                  </span>
-                                  <span className="text-[8.5px] font-black bg-cyan-950 text-cyan-300 px-1.5 py-0.5 rounded font-mono shrink-0">
-                                    6 Bank
-                                  </span>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => setShowCancelLinkSettings(true)}
-                                  className="text-[11px] font-semibold text-mandiri-blue-600 hover:underline flex items-center gap-1 cursor-pointer shrink-0"
-                                >
-                                  <LinkIcon className="w-3.5 h-3.5" />
-                                  <span>Link Tombol</span>
-                                </button>
+                              <div className="text-xs font-semibold text-slate-700 px-1">
+                                Template Bank Resmi:
                               </div>
-                              <p className="text-[10px] text-slate-500 font-medium -mt-1">
-                                Pilih bank untuk menyesuaikan logo resmi & warna aksen secara otomatis:
-                              </p>
                               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                                 {[
                                   { key: "bca", label: "Bank BCA", sub: "Bank Central Asia", prompt: "Buatkan draf email notifikasi transaksi Kartu kredit Berhasil Bank BCA untuk pembelian di merchant Shopee sebesar Rp 5.000.000 beserta tombol BATALKAN TRANSAKSI dengan tata letak tampilan modern dan rapi.", logo: OFFICIAL_BANK_CONFIGS.bca.logoUrl, color: OFFICIAL_BANK_CONFIGS.bca.primaryColor },
@@ -5778,6 +5750,22 @@ export default function App() {
                                   </motion.button>
                                 ))}
                               </div>
+
+                              {/* Subtle Link Tombol footer */}
+                              <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs px-1">
+                                <span className="text-[11px] text-slate-500 font-medium">Link Tombol Batalkan:</span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setShowPlusMenu(false);
+                                    setShowCancelLinkSettings(true);
+                                  }}
+                                  className="text-[11px] font-semibold text-mandiri-blue-600 hover:underline flex items-center gap-1 cursor-pointer"
+                                >
+                                  <LinkIcon className="w-3.5 h-3.5" />
+                                  <span>{customCancelLink.trim() ? "Kustom Aktif" : "Atur Link"}</span>
+                                </button>
+                              </div>
                             </motion.div>
                           )}
                         </AnimatePresence>
@@ -5810,36 +5798,21 @@ export default function App() {
                             className="flex-1 bg-transparent border-0 outline-none text-[16px] sm:text-[17px] font-normal text-[#141413] placeholder:text-[#8e8e93] px-2 py-2 min-w-0"
                           />
 
-                          {/* Microphone Button */}
-                          <button
-                            type="button"
-                            onClick={handleToggleSpeechToText}
-                            disabled={chatLoading || isTypingAI}
-                            className={cn(
-                              "w-10 h-10 rounded-full flex items-center justify-center transition-all cursor-pointer shrink-0 active:scale-95",
-                              isListening ? "bg-rose-500 text-white animate-pulse" : "text-[#141413] hover:bg-slate-100",
-                              (chatLoading || isTypingAI) && "opacity-40 cursor-not-allowed"
-                            )}
-                            title={isListening ? "Mendengarkan..." : "Input Suara (Microphone)"}
-                          >
-                            <Mic className="w-5 h-5 stroke-[2]" />
-                          </button>
-
-                          {/* Audio Wave / Submit / Stop Button */}
+                          {/* Intelligent Single Right Action Button */}
                           {isTypingAI ? (
                             <button
                               type="button"
                               onClick={() => cancelTypingRef.current?.()}
-                              className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-[#18181b] hover:bg-[#27272a] text-white flex items-center justify-center transition-all cursor-pointer shrink-0 shadow-sm active:scale-95"
+                              className="w-10 h-10 rounded-full bg-[#18181b] hover:bg-[#27272a] text-white flex items-center justify-center transition-all cursor-pointer shrink-0 shadow-sm active:scale-95"
                               title="Tampilkan langsung (Lewati animasi)"
                             >
-                              <span className="w-3.5 h-3.5 bg-white rounded-xs" />
+                              <span className="w-3 h-3 bg-white rounded-xs" />
                             </button>
                           ) : chatInput.trim() ? (
                             <button
                               type="submit"
                               disabled={chatLoading}
-                              className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-[#18181b] hover:bg-[#27272a] text-white flex items-center justify-center transition-all cursor-pointer shrink-0 shadow-sm active:scale-95"
+                              className="w-10 h-10 rounded-full bg-[#18181b] hover:bg-[#27272a] text-white flex items-center justify-center transition-all cursor-pointer shrink-0 shadow-sm active:scale-95"
                               title="Kirim pesan"
                             >
                               <ArrowUp className="w-5 h-5 stroke-[2.5]" />
@@ -5847,30 +5820,17 @@ export default function App() {
                           ) : (
                             <button
                               type="button"
-                              onClick={() => handleSendChatMessage(undefined, "Buatkan notifikasi transaksi kartu kredit BCA Rp 5.000.000")}
-                              className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-[#dbeffe] hover:bg-[#cfe7fc] transition-all flex items-center justify-center gap-[3px] shrink-0 cursor-pointer shadow-2xs active:scale-95"
-                              title="Mode Suara"
+                              onClick={handleToggleSpeechToText}
+                              disabled={chatLoading || isTypingAI}
+                              className={cn(
+                                "w-10 h-10 rounded-full flex items-center justify-center transition-all cursor-pointer shrink-0 active:scale-95",
+                                isListening
+                                  ? "bg-rose-500 text-white animate-pulse shadow-md"
+                                  : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                              )}
+                              title={isListening ? "Sedang mendengarkan... (Klik untuk berhenti)" : "Input Suara (Dikte)"}
                             >
-                              <motion.span
-                                animate={{ height: ["8px", "14px", "8px"] }}
-                                transition={{ repeat: Infinity, duration: 1.2, ease: "easeInOut" }}
-                                className="w-[2.4px] bg-[#141413] rounded-full"
-                              />
-                              <motion.span
-                                animate={{ height: ["16px", "22px", "16px"] }}
-                                transition={{ repeat: Infinity, duration: 1.2, delay: 0.15, ease: "easeInOut" }}
-                                className="w-[2.4px] bg-[#141413] rounded-full"
-                              />
-                              <motion.span
-                                animate={{ height: ["12px", "18px", "12px"] }}
-                                transition={{ repeat: Infinity, duration: 1.2, delay: 0.3, ease: "easeInOut" }}
-                                className="w-[2.4px] bg-[#141413] rounded-full"
-                              />
-                              <motion.span
-                                animate={{ height: ["7px", "11px", "7px"] }}
-                                transition={{ repeat: Infinity, duration: 1.2, delay: 0.45, ease: "easeInOut" }}
-                                className="w-[2.4px] bg-[#141413] rounded-full"
-                              />
+                              <Mic className="w-5 h-5 stroke-[2]" />
                             </button>
                           )}
                         </form>
@@ -6627,6 +6587,17 @@ export default function App() {
                         </div>
                       </div>
 
+                      {/* Auto-Purge Cache Assurance Badge */}
+                      <div className="p-3 rounded-2xl bg-cyan-50/80 border border-cyan-200/80 flex items-start gap-2.5">
+                        <Sparkles className="w-4 h-4 text-cyan-600 shrink-0 mt-0.5" />
+                        <div className="text-[11px] leading-snug">
+                          <p className="font-bold text-cyan-900">Pembersihan Cache Otomatis Aktif</p>
+                          <p className="text-cyan-700 text-[10px] mt-0.5">
+                            Menghapus sisa logo bank lain, mengganti seluruh warna aksen ({selectedBankDetail.primaryColor}), dan menghasilkan nomor referensi baru agar draf 100% segar.
+                          </p>
+                        </div>
+                      </div>
+
                       {/* Action Buttons */}
                       <div className="space-y-2 pt-1">
                         <button
@@ -6639,7 +6610,18 @@ export default function App() {
                           style={{ backgroundColor: selectedBankDetail.buttonColor || selectedBankDetail.primaryColor }}
                         >
                           <Check className="w-3.5 h-3.5" />
-                          <span>Terapkan ke Draf Kirim</span>
+                          <span>Terapkan Segar (Bersihkan Cache Sisa)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleApplyBankTemplate(selectedBankDetail.key, true);
+                            setSelectedBankDetail(null);
+                          }}
+                          className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5 text-cyan-600" />
+                          <span>Reset & Buat Draf Baru Bank {selectedBankDetail.name}</span>
                         </button>
                         <button
                           type="button"
@@ -6648,7 +6630,7 @@ export default function App() {
                             setSelectedBankDetail(null);
                             handleSendChatMessage(undefined, `Rancang draf email resmi Bank ${selectedBankDetail.name} dengan tampilan responsif modern`);
                           }}
-                          className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2"
+                          className="w-full py-2 bg-slate-50 hover:bg-slate-100 text-slate-600 text-xs font-medium rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2 border border-slate-200"
                         >
                           <Sparkles className="w-3.5 h-3.5 text-amber-500" />
                           <span>Rancang di Claude Mythos</span>
@@ -6746,10 +6728,9 @@ export default function App() {
             {/* Mobile Bottom Navigation Bar (Hidden on wide desktop screens with sidebar, or when keyboard is active on send tab, or on AI chat tab) */}
             {tab !== "ai" && (
               <nav className={cn(
-                "lg:hidden absolute bottom-0 left-0 right-0 bg-white border-t border-slate-200 h-[60px] items-center justify-around z-50 shadow-[0_-8px_30px_rgba(0,0,0,0.08)] px-1 safe-area-bottom overflow-hidden transition-all duration-200",
+                "lg:hidden fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-xl border-t border-slate-200/90 z-50 shadow-[0_-6px_25px_rgba(0,0,0,0.06)] px-2 pt-1.5 pb-[max(env(safe-area-inset-bottom,0px),8px)] items-center justify-around transition-all duration-200",
                 (tab === "send" && (isKeyboardVisible || isFormInputFocused)) ? "hidden pointer-events-none" : "flex"
               )}>
-                <div className="absolute top-0 left-0 w-full h-[2.5px] bg-gradient-to-r from-mandiri-blue-700 via-mandiri-blue-400 to-mandiri-blue-500 z-10" />
                 {[
                   { id: "ai", icon: ClaudeLogo, label: "AI", isAi: true },
                   { id: "templates", icon: FileText, label: "Templates", isAi: false },
@@ -6761,46 +6742,37 @@ export default function App() {
                   return (
                     <button
                       key={j.id}
+                      type="button"
                       onClick={() => setTab(j.id)}
-                      className="relative flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-all duration-200 cursor-pointer active:scale-95"
+                      className="relative flex flex-col items-center justify-center py-1 flex-1 h-full min-h-[48px] transition-all duration-150 cursor-pointer active:scale-95 touch-manipulation"
                     >
                       <div className={cn(
-                        "p-1.5 rounded-xl transition-all duration-200 relative flex items-center justify-center",
+                        "w-11 h-7 rounded-full transition-all duration-200 relative flex items-center justify-center",
                         isActive 
                           ? j.isAi
-                            ? "bg-amber-50 text-amber-700 shadow-sm"
-                            : "bg-mandiri-blue-50 text-mandiri-blue-700 shadow-sm" 
-                          : "text-slate-400 hover:text-slate-700"
+                            ? "bg-amber-100/80 text-amber-800 shadow-2xs"
+                            : "bg-mandiri-blue-100/70 text-mandiri-blue-700 shadow-2xs" 
+                          : "text-slate-400 hover:text-slate-600"
                       )}>
                         {j.isAi ? (
                           <ClaudeLogo className="w-5 h-5 shrink-0" animated={isActive} />
                         ) : (
                           <j.icon className={cn(
                             "w-4.5 h-4.5 transition-transform", 
-                            isActive && "scale-110"
+                            isActive && "scale-105"
                           )} />
                         )}
                       </div>
                       <span className={cn(
-                        "text-[9.5px] font-black transition-all uppercase tracking-tight",
+                        "text-[10px] mt-0.5 tracking-tight transition-all",
                         isActive
                           ? j.isAi
-                            ? "text-amber-700 font-extrabold"
-                            : "text-mandiri-blue-700 font-extrabold"
-                          : "text-slate-500"
+                            ? "text-amber-800 font-extrabold"
+                            : "text-mandiri-blue-800 font-extrabold"
+                          : "text-slate-500 font-semibold"
                       )}>
                         {j.label}
                       </span>
-                      {isActive && (
-                        <motion.div 
-                          layoutId="activeTabIndicator"
-                          transition={{ type: "spring", stiffness: 450, damping: 35 }}
-                          className={cn(
-                            "absolute bottom-0 w-8 h-1 rounded-t-full shadow-sm",
-                            j.isAi ? "bg-amber-600" : "bg-mandiri-blue-600"
-                          )}
-                        />
-                      )}
                     </button>
                   );
                 })}
